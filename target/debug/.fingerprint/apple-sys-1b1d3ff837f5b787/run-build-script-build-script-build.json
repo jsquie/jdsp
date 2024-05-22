@@ -1,1 +1,0 @@
-{"rustc":17035903558724582896,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[7093222838029055298,"build_script_build",false,5907243027120991916]],"local":[{"RerunIfChanged":{"output":"debug/build/apple-sys-1b1d3ff837f5b787/output","paths":["macos.inc.rs","ios.inc.rs"]}}],"rustflags":[],"metadata":0,"config":0,"compile_kind":0}

@@ -1,3 +1,0 @@
-cargo:rerun-if-changed=macos.inc.rs
-cargo:rerun-if-changed=ios.inc.rs
-cargo:rustc-link-lib=framework=Accelerate
