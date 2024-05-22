@@ -1,0 +1,1 @@
+/Users/jamessquires/Music\ Dev/test_sc_plugin_cookie/MyDevTest/jdsp/target/debug/libcircular_buffer.rlib: /Users/jamessquires/Music\ Dev/test_sc_plugin_cookie/MyDevTest/jdsp/circular_buffer/src/lib.rs

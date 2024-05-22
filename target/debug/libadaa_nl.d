@@ -1,0 +1,1 @@
+/Users/jamessquires/Music\ Dev/test_sc_plugin_cookie/MyDevTest/jdsp/target/debug/libadaa_nl.rlib: /Users/jamessquires/Music\ Dev/test_sc_plugin_cookie/MyDevTest/jdsp/adaa_nl/src/adaa.rs /Users/jamessquires/Music\ Dev/test_sc_plugin_cookie/MyDevTest/jdsp/adaa_nl/src/lib.rs

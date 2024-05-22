@@ -1,0 +1,7 @@
+[package]
+name = "iir_biquad_filter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+adaa_nl = { git = "https://github.com/jsquie/adaa_nl.git" }

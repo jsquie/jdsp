@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "circular_buffer",
+  "iir_biquad_filter",
+  "oversampler",
+  "adaa_nl",
+]

@@ -1,0 +1,1 @@
+/Users/jamessquires/Music\ Dev/test_sc_plugin_cookie/MyDevTest/jdsp/target/debug/libiir_biquad_filter.rlib: /Users/jamessquires/Music\ Dev/test_sc_plugin_cookie/MyDevTest/jdsp/iir_biquad_filter/src/iir_biquad_filter.rs /Users/jamessquires/Music\ Dev/test_sc_plugin_cookie/MyDevTest/jdsp/iir_biquad_filter/src/lib.rs

@@ -1,0 +1,8 @@
+[package]
+name = "adaa_nl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+polylog = "2.6.0"
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" } 
