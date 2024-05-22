@@ -1,4 +1,3 @@
-use adaa_nl::NonlinearProcessor;
 use std::f32::consts::PI;
 
 #[derive(Debug)]
@@ -169,33 +168,6 @@ impl IIRBiquadFilter {
                 y = (coefs[B0] * x) + state[W1];
                 self.states[i][W1] = (coefs[B1] * x) - (coefs[A1] * y) + state[W2];
                 self.states[i][W2] = (coefs[B2] * x) - (coefs[A2] * y);
-            }
-            *s = y;
-        });
-    }
-
-    pub fn process_block_nl_adaa(
-        &mut self,
-        input_signal: &mut [f32],
-        nl: &mut NonlinearProcessor,
-        gain: f32,
-    ) {
-        input_signal.iter_mut().for_each(|s| {
-            let mut y: f32 = 0.0;
-            let num_sections: usize = match &self.order {
-                FilterOrder::First => 1,
-                FilterOrder::Second => 2,
-            };
-            for i in 0..num_sections {
-                let state = self.states[i];
-                let coefs = self.coefs[i];
-
-                let x = if i == 0 { *s } else { y };
-
-                y = (coefs[B0] * x) + state[W1];
-                self.states[i][W1] =
-                    (coefs[B1] * x) - nl.process(gain * (coefs[A1] * y) + state[W2]);
-                self.states[i][W2] = (coefs[B2] * x) - nl.process(gain * coefs[A2] * y);
             }
             *s = y;
         });

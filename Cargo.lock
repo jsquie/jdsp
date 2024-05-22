@@ -11,15 +11,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "adaa_nl"
-version = "0.1.0"
-source = "git+https://github.com/jsquie/adaa_nl.git#ea8f259efa4b6b04168e66ebc046f9dfb84a7aa0"
-dependencies = [
- "nih_plug",
- "polylog",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -480,9 +471,6 @@ dependencies = [
 [[package]]
 name = "iir_biquad_filter"
 version = "0.1.0"
-dependencies = [
- "adaa_nl 0.1.0 (git+https://github.com/jsquie/adaa_nl.git)",
-]
 
 [[package]]
 name = "indexmap"
@@ -523,7 +511,7 @@ checksum = "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b"
 name = "jdsp"
 version = "0.1.0"
 dependencies = [
- "adaa_nl 0.1.0",
+ "adaa_nl",
  "circular_buffer",
  "iir_biquad_filter",
  "oversampler",
