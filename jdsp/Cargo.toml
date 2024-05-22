@@ -1,0 +1,24 @@
+[package]
+name = "jdsp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+circular_buffer = { path = "../circular_buffer", default-features = false, optional = true }
+adaa_nl = { path = "../adaa_nl", default-features = false, optional= true}
+iir_biquad_filter = { path = "../iir_biquad_filter", default-features = false, optional = true }
+oversampler = { path = "../oversampler", default-features = false, optional = true }
+
+[features]
+default = []
+all = [
+  "circular_buffer",
+  "adaa_nl",
+  "iir_biquad_filter",
+  "oversampler"
+]
+# circular_buffer = ["circular_buffer"]
+# adaa_nl = ["adaa_nl"]
+# iir_biquad_filter = ["iir_biquad_filter"]
+# oversampler = ["oversampler"]
+

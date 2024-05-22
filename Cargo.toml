@@ -1,7 +1,8 @@
 [workspace]
 members = [
+  "jdsp",
   "circular_buffer",
   "iir_biquad_filter",
   "oversampler",
-  "adaa_nl",
+  "adaa_nl", 
 ]

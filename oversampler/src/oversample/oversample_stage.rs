@@ -1,10 +1,7 @@
 use crate::oversample::os_filter_constants::*;
 use crate::oversample::SampleRole;
-use circular_buffer::{CircularConvBuffer32, CircularDelayBuffer};
+use circular_buffer::circular_buffer::{CircularConvBuffer32, CircularDelayBuffer};
 
-// const NEG_ONE_DB_GAIN: f32 = 0.8912509381337456;
-
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct OversampleStage {
     filter_buff: CircularConvBuffer32,
@@ -12,7 +9,6 @@ pub struct OversampleStage {
     kernel: [f32; 32],
     pub data: Vec<f32>,
     scratch_buff: Vec<f32>,
-    size: usize,
     delay_coef: Option<f32>,
 }
 
@@ -24,7 +20,6 @@ impl OversampleStage {
                 SampleRole::UpSample => CircularDelayBuffer::new(UP_DELAY),
                 SampleRole::DownSample => CircularDelayBuffer::new(DOWN_DELAY),
             },
-            size: target_size,
             kernel: [0.0f32; 32],
             data: vec![0.0_f32; target_size],
             scratch_buff: match role {
@@ -102,13 +97,11 @@ mod tests {
         let _buf: &mut [f32] = &mut [0.0; 8];
         let os_stage = OversampleStage::new(8, SampleRole::UpSample);
         assert_eq!(os_stage.data, &[0.0_f32; 8]);
-        assert_eq!(os_stage.size, 8);
 
         let _buf_64: &mut [f32] = &mut [0.0; 8];
         let os_stage_64 = OversampleStage::new(8, SampleRole::UpSample);
 
         assert_eq!(os_stage_64.data, &[0.0_f32; 8]);
-        assert_eq!(os_stage_64.size, 8);
     }
 
     #[test]
