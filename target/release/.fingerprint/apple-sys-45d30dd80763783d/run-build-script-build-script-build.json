@@ -1,0 +1,1 @@
+{"rustc":17035903558724582896,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[7093222838029055298,"build_script_build",false,2927684418001659377]],"local":[{"RerunIfChanged":{"output":"release/build/apple-sys-45d30dd80763783d/output","paths":["macos.inc.rs","ios.inc.rs"]}}],"rustflags":[],"metadata":0,"config":0,"compile_kind":0}

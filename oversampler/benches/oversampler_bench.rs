@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use oversampler::Oversample;
-use oversampler::OversampleFactor;
+use oversampler::oversample::Oversample;
+use oversampler::oversample::OversampleFactor;
 
 fn os_bench(c: &mut Criterion) {
     let mut os_2x = Oversample::new(OversampleFactor::TwoTimes, 64);
