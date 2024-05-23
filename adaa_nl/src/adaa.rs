@@ -1,6 +1,4 @@
-use fast_math::{exp, exp_raw};
 use polylog::Li2;
-// use std::f32::consts::PI;
 
 use nih_plug::prelude::*;
 
@@ -14,9 +12,9 @@ pub enum ProcessorStyle {
     #[id = "tanh"]
     #[name = "Tanh"]
     Tanh = 1,
-    #[id = "soft clip"]
-    #[name = "Soft Clip"]
-    SoftClip = 2,
+    #[id = "soft clip x2"]
+    #[name = "Soft Clip X2"]
+    SoftClipX2 = 2,
 }
 use ProcessorStyle::*;
 
@@ -65,70 +63,33 @@ struct ProcState {
 }
 
 impl ProcState {
-    const SOFT_CLIP: H = |x| {
-        let x32: f32 = x as f32;
-        let signum: f32 = x32.signum();
-        let is_pos: f32 = (signum + 1.0) / 2.0;
-        let is_neg: f32 = ((signum - 1.0) / 2.0).abs();
-        ((is_pos * (-exp_raw(-x32) + 1.0)) + (is_neg * (exp_raw(x32) - 1.0))) as f64
+    const SOFT_CLIP_X2: H = |x| {
+        if x >= 0.0 {
+            -(1.0 / (x + 1.0).powi(2)) + 1.0
+        } else {
+            (1.0 / (-x + 1.0).powi(2)) - 1.0
+        }
     };
 
-    const SOFT_CLIP_AD1: H = |x| {
-        let x32: f32 = x as f32;
-        let ex = exp_raw(-x32);
-        let signum: f32 = x32.signum();
-        let is_pos: f32 = (signum + 1.0) / 2.0;
-        let is_neg: f32 = ((signum - 1.0) / 2.0).abs();
-        ((is_pos * (-ex + x32)) + (is_neg * (-ex - x32))) as f64
+    const SOFT_CLIP_X2_AD1: H = |x| {
+        if x >= 0.0 {
+            (1. / (x + 1.)) + x
+        } else {
+            (1. / (-x + 1.)) - x
+        }
     };
 
-    const SOFT_CLIP_AD2: H = |x| x;
+    const SOFT_CLIP_X2_AD2: H = |x| {
+        if x >= 0.0 {
+            (x + 1.).abs().ln() + (x.powi(2) / 2.) + x
+        } else {
+            -(-x + 1.).abs().ln() - (x.powi(2) / 2.) + x
+        }
+    };
 
-    // const TANH: fn(f64) -> f64 = |x| ((2.0 / (1.0 + (-2.0 * exp_raw(x as f32) as f64))) - 1.0);
     const TANH: fn(f64) -> f64 = |x| x.tanh();
 
     const TANH_AD1: fn(f64) -> f64 = |x| x.cosh().ln();
-
-    /*
-    #[inline]
-    fn li2(x: f32) -> f32 {
-        let z2 = PI * PI / 6.0_f32;
-        #[inline]
-        fn approx(x: f32) -> f32 {
-            let cp = [1.00000020_f32, -0.780790946_f32, 0.0648256871_f32];
-            let cq = [1.00000000_f32, -1.03077545_f32, 0.211216710_f32];
-
-            let p = cp[0] + x * (cp[1] + x * cp[2]);
-            let q = cq[0] + x * (cq[1] + x * cq[2]);
-
-            x * p / q
-        }
-
-        match x {
-            x if x < -1.0 => {
-                let l = (1.0 - x).ln();
-                approx(1.0 / (1.0 - x)) - z2 + l * (0.5 * l - (-x).ln())
-            }
-            x if x == -1.0 => -0.5 * z2,
-            x if x < 0.0 => {
-                let l = (-x).ln_1p();
-                -approx(x / (x - 1.0)) - 0.5 * l * l
-            }
-            x if x == 0.0 => x,
-            x if x < 0.5 => approx(x),
-            x if x < 1.0 => -(approx(1.0 - x)) + z2 - x.ln() * (-x).ln_1p(),
-            x if x == 1.0 => z2,
-            x if x < 2.0 => {
-                let l = x.ln();
-                approx(1.0 - 1. / x) + z2 - l * ((1.0 - 1.0 / x).ln() + 0.5 * l)
-            }
-            _ => {
-                let l = x.ln();
-                -approx(1.0 / x) + 2.0 * z2 - 0.5 * l * l
-            }
-        }
-    }
-    */
 
     const TANH_AD2: fn(f64) -> f64 = |x| {
         let expval = (-2.0 * x).exp();
@@ -212,7 +173,7 @@ impl ProcState {
         }
     }
 
-    pub fn first_order_soft_clip() -> ProcState {
+    pub fn first_order_soft_clip_x2() -> ProcState {
         ProcState {
             x1: 0.0,
             x2: 0.0,
@@ -220,13 +181,13 @@ impl ProcState {
             ad1_x1: 0.0,
             ad2_x0: 0.0,
             ad2_x1: 0.0,
-            nl_func: ProcState::SOFT_CLIP,
-            nl_func_ad1: ProcState::SOFT_CLIP_AD1,
+            nl_func: ProcState::SOFT_CLIP_X2,
+            nl_func_ad1: ProcState::SOFT_CLIP_X2_AD1,
             nl_func_ad2: |x| x,
         }
     }
 
-    pub fn second_order_soft_clip() -> ProcState {
+    pub fn second_order_soft_clip_x2() -> ProcState {
         ProcState {
             x1: 0.0,
             x2: 0.0,
@@ -234,9 +195,9 @@ impl ProcState {
             ad1_x1: 0.0,
             ad2_x0: 0.0,
             ad2_x1: 0.0,
-            nl_func: ProcState::SOFT_CLIP,
-            nl_func_ad1: ProcState::SOFT_CLIP_AD1,
-            nl_func_ad2: ProcState::SOFT_CLIP_AD2,
+            nl_func: ProcState::SOFT_CLIP_X2,
+            nl_func_ad1: ProcState::SOFT_CLIP_X2_AD1,
+            nl_func_ad2: ProcState::SOFT_CLIP_X2_AD2,
         }
     }
 }
@@ -288,7 +249,7 @@ impl ADAA {
     }
 
     fn first_order_soft_clip() -> ADAA {
-        let new_state = ProcState::first_order_soft_clip();
+        let new_state = ProcState::first_order_soft_clip_x2();
         ADAA {
             current_proc_state: new_state,
             proc_alg: Self::PROCESS_FIRST_ORDER,
@@ -296,7 +257,7 @@ impl ADAA {
     }
 
     fn second_order_soft_clip() -> ADAA {
-        let new_state = ProcState::second_order_soft_clip();
+        let new_state = ProcState::second_order_soft_clip_x2();
         ADAA {
             current_proc_state: new_state,
             proc_alg: Self::PROCESS_SECOND_ORDER,
@@ -376,8 +337,8 @@ impl NonlinearProcessor {
                 State(HardClip, SecondOrder) => ADAA::second_order_hard_clip(),
                 State(Tanh, FirstOrder) => ADAA::first_order_tanh(),
                 State(Tanh, SecondOrder) => ADAA::second_order_tanh(),
-                State(SoftClip, FirstOrder) => ADAA::first_order_soft_clip(),
-                State(SoftClip, SecondOrder) => ADAA::second_order_soft_clip(),
+                State(SoftClipX2, FirstOrder) => ADAA::first_order_soft_clip(),
+                State(SoftClipX2, SecondOrder) => ADAA::second_order_soft_clip(),
             },
         }
     }
@@ -412,8 +373,8 @@ impl NonlinearProcessor {
             State(HardClip, SecondOrder) => self.initialize_as_second_order_hc(),
             State(Tanh, FirstOrder) => self.initialize_as_first_order_tanh(),
             State(Tanh, SecondOrder) => self.initialize_as_second_order_tanh(),
-            State(SoftClip, FirstOrder) => self.initialize_as_first_order_soft_clip(),
-            State(SoftClip, SecondOrder) => self.initialize_as_second_order_soft_clip(),
+            State(SoftClipX2, FirstOrder) => self.initialize_as_first_order_soft_clip_x2(),
+            State(SoftClipX2, SecondOrder) => self.initialize_as_second_order_soft_clip_x2(),
         }
     }
 
@@ -440,13 +401,13 @@ impl NonlinearProcessor {
         self.proc = ADAA::second_order_tanh();
     }
 
-    fn initialize_as_first_order_soft_clip(&mut self) {
-        self.state = State(SoftClip, FirstOrder);
+    fn initialize_as_first_order_soft_clip_x2(&mut self) {
+        self.state = State(SoftClipX2, FirstOrder);
         self.proc = ADAA::first_order_soft_clip();
     }
 
-    fn initialize_as_second_order_soft_clip(&mut self) {
-        self.state = State(SoftClip, SecondOrder);
+    fn initialize_as_second_order_soft_clip_x2(&mut self) {
+        self.state = State(SoftClipX2, SecondOrder);
         self.proc = ADAA::second_order_soft_clip();
     }
 }
@@ -479,8 +440,8 @@ mod test {
         assert_eq!(proc.state, State(HardClip, FirstOrder));
         assert_eq!(proc.proc, ADAA::first_order_hard_clip());
 
-        proc.change_state(ProcStateTransition::ChangeStyle(SoftClip));
-        assert_eq!(proc.state, State(SoftClip, FirstOrder));
+        proc.change_state(ProcStateTransition::ChangeStyle(SoftClipX2));
+        assert_eq!(proc.state, State(SoftClipX2, FirstOrder));
         assert_eq!(proc.proc, ADAA::first_order_soft_clip());
 
         proc.change_state(ProcStateTransition::ChangeStyle(Tanh));
@@ -522,17 +483,17 @@ mod test {
         assert_eq!(proc_hard_clip_ad2.nl_func_ad1, ProcState::HARD_CLIP_AD1);
         assert_eq!(proc_hard_clip_ad2.nl_func_ad2, ProcState::HARD_CLIP_AD2);
 
-        let proc_soft_clip_ad1 = ProcState::first_order_soft_clip();
+        let proc_soft_clip_ad1 = ProcState::first_order_soft_clip_x2();
 
-        assert_eq!(proc_soft_clip_ad1.nl_func, ProcState::SOFT_CLIP);
-        assert_eq!(proc_soft_clip_ad1.nl_func_ad1, ProcState::SOFT_CLIP_AD1);
-        assert_ne!(proc_soft_clip_ad1.nl_func_ad2, ProcState::SOFT_CLIP_AD2);
+        assert_eq!(proc_soft_clip_ad1.nl_func, ProcState::SOFT_CLIP_X2);
+        assert_eq!(proc_soft_clip_ad1.nl_func_ad1, ProcState::SOFT_CLIP_X2_AD1);
+        assert_ne!(proc_soft_clip_ad1.nl_func_ad2, ProcState::SOFT_CLIP_X2_AD2);
 
-        let proc_soft_clip_ad2 = ProcState::second_order_soft_clip();
+        let proc_soft_clip_ad2 = ProcState::second_order_soft_clip_x2();
 
-        assert_eq!(proc_soft_clip_ad2.nl_func, ProcState::SOFT_CLIP);
-        assert_eq!(proc_soft_clip_ad2.nl_func_ad1, ProcState::SOFT_CLIP_AD1);
-        assert_eq!(proc_soft_clip_ad2.nl_func_ad2, ProcState::SOFT_CLIP_AD2);
+        assert_eq!(proc_soft_clip_ad2.nl_func, ProcState::SOFT_CLIP_X2);
+        assert_eq!(proc_soft_clip_ad2.nl_func_ad1, ProcState::SOFT_CLIP_X2_AD1);
+        assert_eq!(proc_soft_clip_ad2.nl_func_ad2, ProcState::SOFT_CLIP_X2_AD2);
     }
 
     #[test]
@@ -564,13 +525,13 @@ mod test {
         let adaa_sc_ad1 = ADAA::first_order_soft_clip();
         assert_eq!(
             adaa_sc_ad1.current_proc_state,
-            ProcState::first_order_soft_clip()
+            ProcState::first_order_soft_clip_x2()
         );
 
         let adaa_sc_ad2 = ADAA::second_order_soft_clip();
         assert_eq!(
             adaa_sc_ad2.current_proc_state,
-            ProcState::second_order_soft_clip()
+            ProcState::second_order_soft_clip_x2()
         );
     }
 
@@ -597,20 +558,20 @@ mod test {
         assert_eq!(nl_hc_ad2.proc, ADAA::second_order_hard_clip());
 
         let mut nl_sc_ad1 = NonlinearProcessor::new();
-        nl_sc_ad1.change_state(ChangeStyle(SoftClip));
-        assert_eq!(nl_sc_ad1.state, State(SoftClip, FirstOrder));
+        nl_sc_ad1.change_state(ChangeStyle(SoftClipX2));
+        assert_eq!(nl_sc_ad1.state, State(SoftClipX2, FirstOrder));
         assert_eq!(nl_sc_ad1.proc, ADAA::first_order_soft_clip());
 
         let mut nl_sc_ad2 = NonlinearProcessor::new();
-        nl_sc_ad2.change_state(ChangeStyle(SoftClip));
+        nl_sc_ad2.change_state(ChangeStyle(SoftClipX2));
         nl_sc_ad2.change_state(ChangeOrder(SecondOrder));
-        assert_eq!(nl_sc_ad2.state, State(SoftClip, SecondOrder));
+        assert_eq!(nl_sc_ad2.state, State(SoftClipX2, SecondOrder));
         assert_eq!(nl_sc_ad2.proc, ADAA::second_order_soft_clip());
     }
 
     #[test]
     fn check_tanh_hc_sc() {
-        let proc = ProcState::first_order_soft_clip();
+        let proc = ProcState::first_order_soft_clip_x2();
 
         let expected_results_sc: [f64; 50] = [
             -0.86466472,
