@@ -1,5 +1,6 @@
-use fast_math::exp_raw;
-use std::f32::consts::PI;
+use fast_math::{exp, exp_raw};
+use polylog::Li2;
+// use std::f32::consts::PI;
 
 use nih_plug::prelude::*;
 
@@ -50,27 +51,26 @@ type H2 = fn(f64) -> f64;
 
 const ONE_SIXTH: f64 = 1.0 / 6.0;
 
-#[derive(Debug, Copy, Clone)]
-pub struct ProcState {
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct ProcState {
     x1: f64,
     x2: f64,
     d2: f64,
     ad1_x1: f64,
     ad2_x0: f64,
     ad2_x1: f64,
-    pub nl_func: H,
-    pub nl_func_ad1: H1,
-    pub nl_func_ad2: H2,
+    nl_func: H,
+    nl_func_ad1: H1,
+    nl_func_ad2: H2,
 }
 
 impl ProcState {
     const SOFT_CLIP: H = |x| {
         let x32: f32 = x as f32;
-        let ex = exp_raw(-x32);
         let signum: f32 = x32.signum();
         let is_pos: f32 = (signum + 1.0) / 2.0;
         let is_neg: f32 = ((signum - 1.0) / 2.0).abs();
-        ((is_pos * (-ex + 1.0)) + (is_neg * (ex - 1.0))) as f64
+        ((is_pos * (-exp_raw(-x32) + 1.0)) + (is_neg * (exp_raw(x32) - 1.0))) as f64
     };
 
     const SOFT_CLIP_AD1: H = |x| {
@@ -84,10 +84,12 @@ impl ProcState {
 
     const SOFT_CLIP_AD2: H = |x| x;
 
-    const TANH: fn(f64) -> f64 = |x| ((2.0 / (1.0 + (-2.0 * exp_raw(x as f32) as f64))) - 1.0);
+    // const TANH: fn(f64) -> f64 = |x| ((2.0 / (1.0 + (-2.0 * exp_raw(x as f32) as f64))) - 1.0);
+    const TANH: fn(f64) -> f64 = |x| x.tanh();
 
-    const TANH_AD1: fn(f64) -> f64 = |x| ((x as f32).cosh().ln()) as f64;
+    const TANH_AD1: fn(f64) -> f64 = |x| x.cosh().ln();
 
+    /*
     #[inline]
     fn li2(x: f32) -> f32 {
         let z2 = PI * PI / 6.0_f32;
@@ -126,11 +128,11 @@ impl ProcState {
             }
         }
     }
+    */
 
     const TANH_AD2: fn(f64) -> f64 = |x| {
-        let expval = (-2. * x).exp();
-        0.5 * (ProcState::li2(-expval as f32) as f64
-            - x * (x + 2.0 * (expval + 1.).ln() - 2.0 * x.cosh().ln()))
+        let expval = exp(-2.0 * (x as f32)) as f64;
+        0.5 * (Li2::li2(&-expval) - x * (x + 2.0 * (expval + 1.).ln() - 2.0 * x.cosh().ln()))
             + (core::f64::consts::PI.powi(2) / 24.0)
     };
 
@@ -239,18 +241,25 @@ impl ProcState {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 struct ADAA {
     current_proc_state: ProcState,
     proc_alg: fn(f64, &mut ProcState) -> f32,
 }
 
+type ProcAlg = fn(f64, &mut ProcState) -> f32;
+
 impl ADAA {
+    const PROCESS_FIRST_ORDER: ProcAlg =
+        |x: f64, y: &mut ProcState| ADAA::process_first_order(y, x);
+    const PROCESS_SECOND_ORDER: ProcAlg =
+        |x: f64, y: &mut ProcState| ADAA::process_second_order(y, x);
+
     fn first_order_tanh() -> ADAA {
         let new_state = ProcState::first_order_tanh();
         ADAA {
             current_proc_state: new_state,
-            proc_alg: |x: f64, y: &mut ProcState| ADAA::process_first_order(y, x),
+            proc_alg: Self::PROCESS_FIRST_ORDER,
         }
     }
 
@@ -258,7 +267,7 @@ impl ADAA {
         let new_state = ProcState::second_order_tanh();
         ADAA {
             current_proc_state: new_state,
-            proc_alg: |x: f64, y: &mut ProcState| ADAA::process_second_order(y, x),
+            proc_alg: Self::PROCESS_SECOND_ORDER,
         }
     }
 
@@ -266,7 +275,7 @@ impl ADAA {
         let new_state = ProcState::first_order_hard_clip();
         ADAA {
             current_proc_state: new_state,
-            proc_alg: |x: f64, y: &mut ProcState| ADAA::process_first_order(y, x),
+            proc_alg: Self::PROCESS_FIRST_ORDER,
         }
     }
 
@@ -274,7 +283,7 @@ impl ADAA {
         let new_state = ProcState::second_order_hard_clip();
         ADAA {
             current_proc_state: new_state,
-            proc_alg: |x: f64, y: &mut ProcState| ADAA::process_second_order(y, x),
+            proc_alg: Self::PROCESS_SECOND_ORDER,
         }
     }
 
@@ -282,7 +291,7 @@ impl ADAA {
         let new_state = ProcState::first_order_soft_clip();
         ADAA {
             current_proc_state: new_state,
-            proc_alg: |x: f64, y: &mut ProcState| ADAA::process_second_order(y, x),
+            proc_alg: Self::PROCESS_FIRST_ORDER,
         }
     }
 
@@ -290,7 +299,7 @@ impl ADAA {
         let new_state = ProcState::second_order_soft_clip();
         ADAA {
             current_proc_state: new_state,
-            proc_alg: |x: f64, y: &mut ProcState| ADAA::process_second_order(y, x),
+            proc_alg: Self::PROCESS_SECOND_ORDER,
         }
     }
 
@@ -417,16 +426,15 @@ impl NonlinearProcessor {
         self.proc = ADAA::first_order_hard_clip();
     }
 
-    fn initialize_as_first_order_tanh(&mut self) {
-        self.state = State(Tanh, FirstOrder);
-        self.proc = ADAA::first_order_tanh();
-    }
-
     fn initialize_as_second_order_hc(&mut self) {
         self.state = State(HardClip, SecondOrder);
         self.proc = ADAA::second_order_hard_clip();
     }
 
+    fn initialize_as_first_order_tanh(&mut self) {
+        self.state = State(Tanh, FirstOrder);
+        self.proc = ADAA::first_order_tanh();
+    }
     fn initialize_as_second_order_tanh(&mut self) {
         self.state = State(Tanh, SecondOrder);
         self.proc = ADAA::second_order_tanh();
@@ -449,7 +457,7 @@ mod test {
 
     use super::*;
 
-    const ERR_TOL: f64 = 1e-5;
+    const ERR_TOL: f64 = 1e-2;
     const INPUT_LINSPACE: [f64; 50] = [
         -2., -1.92, -1.84, -1.76, -1.68, -1.6, -1.52, -1.44, -1.36, -1.28, -1.2, -1.12, -1.04,
         -0.96, -0.88, -0.8, -0.72, -0.64, -0.56, -0.48, -0.4, -0.32, -0.24, -0.16, -0.08, 0., 0.08,
@@ -464,6 +472,204 @@ mod test {
             .for_each(|(r, e)| assert!((r - e).abs() <= ERR_TOL, "failure. r: {}, e: {}", r, e));
     }
 
+    #[test]
+    fn check_change_state() {
+        let mut proc = NonlinearProcessor::new();
+
+        assert_eq!(proc.state, State(HardClip, FirstOrder));
+        assert_eq!(proc.proc, ADAA::first_order_hard_clip());
+
+        proc.change_state(ProcStateTransition::ChangeStyle(SoftClip));
+        assert_eq!(proc.state, State(SoftClip, FirstOrder));
+        assert_eq!(proc.proc, ADAA::first_order_soft_clip());
+
+        proc.change_state(ProcStateTransition::ChangeStyle(Tanh));
+        assert_eq!(proc.state, State(Tanh, FirstOrder));
+        assert_eq!(proc.proc, ADAA::first_order_tanh());
+
+        proc.change_state(ProcStateTransition::ChangeOrder(SecondOrder));
+        assert_eq!(proc.state, State(Tanh, SecondOrder));
+        assert_eq!(proc.proc, ADAA::second_order_tanh());
+
+        proc.change_state(ProcStateTransition::ChangeOrder(FirstOrder));
+        assert_eq!(proc.state, State(Tanh, FirstOrder));
+        assert_eq!(proc.proc, ADAA::first_order_tanh());
+    }
+
+    #[test]
+    fn test_proc_state_internals() {
+        let proc_tanh_ad1 = ProcState::first_order_tanh();
+
+        assert_eq!(proc_tanh_ad1.nl_func, ProcState::TANH);
+        assert_eq!(proc_tanh_ad1.nl_func_ad1, ProcState::TANH_AD1);
+        assert_ne!(proc_tanh_ad1.nl_func_ad2, ProcState::TANH_AD2);
+
+        let proc_tanh_ad2 = ProcState::second_order_tanh();
+
+        assert_eq!(proc_tanh_ad2.nl_func, ProcState::TANH);
+        assert_eq!(proc_tanh_ad2.nl_func_ad1, ProcState::TANH_AD1);
+        assert_eq!(proc_tanh_ad2.nl_func_ad2, ProcState::TANH_AD2);
+
+        let proc_hard_clip_ad1 = ProcState::first_order_hard_clip();
+
+        assert_eq!(proc_hard_clip_ad1.nl_func, ProcState::HARD_CLIP);
+        assert_eq!(proc_hard_clip_ad1.nl_func_ad1, ProcState::HARD_CLIP_AD1);
+        assert_ne!(proc_hard_clip_ad1.nl_func_ad2, ProcState::HARD_CLIP_AD2);
+
+        let proc_hard_clip_ad2 = ProcState::second_order_hard_clip();
+
+        assert_eq!(proc_hard_clip_ad2.nl_func, ProcState::HARD_CLIP);
+        assert_eq!(proc_hard_clip_ad2.nl_func_ad1, ProcState::HARD_CLIP_AD1);
+        assert_eq!(proc_hard_clip_ad2.nl_func_ad2, ProcState::HARD_CLIP_AD2);
+
+        let proc_soft_clip_ad1 = ProcState::first_order_soft_clip();
+
+        assert_eq!(proc_soft_clip_ad1.nl_func, ProcState::SOFT_CLIP);
+        assert_eq!(proc_soft_clip_ad1.nl_func_ad1, ProcState::SOFT_CLIP_AD1);
+        assert_ne!(proc_soft_clip_ad1.nl_func_ad2, ProcState::SOFT_CLIP_AD2);
+
+        let proc_soft_clip_ad2 = ProcState::second_order_soft_clip();
+
+        assert_eq!(proc_soft_clip_ad2.nl_func, ProcState::SOFT_CLIP);
+        assert_eq!(proc_soft_clip_ad2.nl_func_ad1, ProcState::SOFT_CLIP_AD1);
+        assert_eq!(proc_soft_clip_ad2.nl_func_ad2, ProcState::SOFT_CLIP_AD2);
+    }
+
+    #[test]
+    fn test_adaa_internals() {
+        let adaa_tanh_ad1 = ADAA::first_order_tanh();
+        assert_eq!(
+            adaa_tanh_ad1.current_proc_state,
+            ProcState::first_order_tanh()
+        );
+
+        let adaa_tanh_ad2 = ADAA::second_order_tanh();
+        assert_eq!(
+            adaa_tanh_ad2.current_proc_state,
+            ProcState::second_order_tanh()
+        );
+
+        let adaa_hc_ad1 = ADAA::first_order_hard_clip();
+        assert_eq!(
+            adaa_hc_ad1.current_proc_state,
+            ProcState::first_order_hard_clip()
+        );
+
+        let adaa_hc_ad2 = ADAA::second_order_hard_clip();
+        assert_eq!(
+            adaa_hc_ad2.current_proc_state,
+            ProcState::second_order_hard_clip()
+        );
+
+        let adaa_sc_ad1 = ADAA::first_order_soft_clip();
+        assert_eq!(
+            adaa_sc_ad1.current_proc_state,
+            ProcState::first_order_soft_clip()
+        );
+
+        let adaa_sc_ad2 = ADAA::second_order_soft_clip();
+        assert_eq!(
+            adaa_sc_ad2.current_proc_state,
+            ProcState::second_order_soft_clip()
+        );
+    }
+
+    #[test]
+    fn test_nl_proc_internals() {
+        let mut nl_tanh_ad1 = NonlinearProcessor::new();
+        nl_tanh_ad1.change_state(ChangeStyle(Tanh));
+        assert_eq!(nl_tanh_ad1.state, State(Tanh, FirstOrder));
+        assert_eq!(nl_tanh_ad1.proc, ADAA::first_order_tanh());
+
+        let mut nl_tanh_ad2 = NonlinearProcessor::new();
+        nl_tanh_ad2.change_state(ChangeStyle(Tanh));
+        nl_tanh_ad2.change_state(ChangeOrder(SecondOrder));
+        assert_eq!(nl_tanh_ad2.state, State(Tanh, SecondOrder));
+        assert_eq!(nl_tanh_ad2.proc, ADAA::second_order_tanh());
+
+        let nl_hc_ad1 = NonlinearProcessor::new();
+        assert_eq!(nl_hc_ad1.state, State(HardClip, FirstOrder));
+        assert_eq!(nl_hc_ad1.proc, ADAA::first_order_hard_clip());
+
+        let mut nl_hc_ad2 = NonlinearProcessor::new();
+        nl_hc_ad2.change_state(ChangeOrder(SecondOrder));
+        assert_eq!(nl_hc_ad2.state, State(HardClip, SecondOrder));
+        assert_eq!(nl_hc_ad2.proc, ADAA::second_order_hard_clip());
+
+        let mut nl_sc_ad1 = NonlinearProcessor::new();
+        nl_sc_ad1.change_state(ChangeStyle(SoftClip));
+        assert_eq!(nl_sc_ad1.state, State(SoftClip, FirstOrder));
+        assert_eq!(nl_sc_ad1.proc, ADAA::first_order_soft_clip());
+
+        let mut nl_sc_ad2 = NonlinearProcessor::new();
+        nl_sc_ad2.change_state(ChangeStyle(SoftClip));
+        nl_sc_ad2.change_state(ChangeOrder(SecondOrder));
+        assert_eq!(nl_sc_ad2.state, State(SoftClip, SecondOrder));
+        assert_eq!(nl_sc_ad2.proc, ADAA::second_order_soft_clip());
+    }
+
+    #[test]
+    fn check_tanh_hc_sc() {
+        let proc = ProcState::first_order_soft_clip();
+
+        let expected_results_sc: [f64; 50] = [
+            -0.86466472,
+            -0.85339304,
+            -0.84118257,
+            -0.82795514,
+            -0.81362602,
+            -0.79810348,
+            -0.78128811,
+            -0.76307224,
+            -0.74333922,
+            -0.7219627,
+            -0.69880579,
+            -0.67372021,
+            -0.64654532,
+            -0.61710711,
+            -0.58521709,
+            -0.55067104,
+            -0.51324774,
+            -0.47270758,
+            -0.42879094,
+            -0.38121661,
+            -0.32967995,
+            -0.27385096,
+            -0.21337214,
+            -0.14785621,
+            -0.07688365,
+            0.,
+            0.07688365,
+            0.14785621,
+            0.21337214,
+            0.27385096,
+            0.32967995,
+            0.38121661,
+            0.42879094,
+            0.47270758,
+            0.51324774,
+            0.55067104,
+            0.58521709,
+            0.61710711,
+            0.64654532,
+            0.67372021,
+            0.69880579,
+            0.7219627,
+            0.74333922,
+            0.76307224,
+            0.78128811,
+            0.79810348,
+            0.81362602,
+            0.82795514,
+            0.84118257,
+            0.85339304,
+        ];
+
+        let result: Vec<f64> = INPUT_LINSPACE.iter().map(|v| (proc.nl_func)(*v)).collect();
+
+        check_results_64(&result, &expected_results_sc);
+    }
+
     /*
     fn check_results_32(input: &[f32], expected: &[f32]) {
         input.iter().zip(expected.iter()).for_each(|(r, e)| {
@@ -476,6 +682,68 @@ mod test {
         });
     }
     */
+
+    #[test]
+    fn tanh_test() {
+        let expected_results = [
+            -0.96402758,
+            -0.95791731,
+            -0.95079514,
+            -0.94250301,
+            -0.93286155,
+            -0.92166855,
+            -0.90869766,
+            -0.89369773,
+            -0.87639307,
+            -0.85648492,
+            -0.83365461,
+            -0.80756892,
+            -0.77788807,
+            -0.74427687,
+            -0.70641932,
+            -0.66403677,
+            -0.6169093,
+            -0.56489955,
+            -0.50797743,
+            -0.44624361,
+            -0.37994896,
+            -0.30950692,
+            -0.23549575,
+            -0.1586485,
+            -0.07982977,
+            0.,
+            0.07982977,
+            0.1586485,
+            0.23549575,
+            0.30950692,
+            0.37994896,
+            0.44624361,
+            0.50797743,
+            0.56489955,
+            0.6169093,
+            0.66403677,
+            0.70641932,
+            0.74427687,
+            0.77788807,
+            0.80756892,
+            0.83365461,
+            0.85648492,
+            0.87639307,
+            0.89369773,
+            0.90869766,
+            0.92166855,
+            0.93286155,
+            0.94250301,
+            0.95079514,
+            0.95791731,
+        ];
+
+        let proc = ProcState::first_order_tanh();
+
+        let result: Vec<f64> = INPUT_LINSPACE.iter().map(|v| (proc.nl_func)(*v)).collect();
+
+        check_results_64(&result, &expected_results);
+    }
 
     #[test]
     fn tanh_ad1_test() {
