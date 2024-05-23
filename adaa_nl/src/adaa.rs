@@ -131,8 +131,8 @@ impl ProcState {
     */
 
     const TANH_AD2: fn(f64) -> f64 = |x| {
-        let expval = exp(-2.0 * (x as f32)) as f64;
-        0.5 * (Li2::li2(&-expval) - x * (x + 2.0 * (expval + 1.).ln() - 2.0 * x.cosh().ln()))
+        let expval = (-2.0 * x).exp();
+        0.5 * (Li2::li2(&(-expval)) - x * (x + 2.0 * (expval + 1.).ln() - 2.0 * x.cosh().ln()))
             + (core::f64::consts::PI.powi(2) / 24.0)
     };
 
