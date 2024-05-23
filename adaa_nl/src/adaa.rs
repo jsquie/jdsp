@@ -1,6 +1,5 @@
-use polylog::Li2;
-use std::f64::consts::PI;
-use std::fmt::Debug;
+use fast_math::exp_raw;
+use std::f32::consts::PI;
 
 use nih_plug::prelude::*;
 
@@ -14,6 +13,9 @@ pub enum ProcessorStyle {
     #[id = "tanh"]
     #[name = "Tanh"]
     Tanh = 1,
+    #[id = "soft clip"]
+    #[name = "Soft Clip"]
+    SoftClip = 2,
 }
 use ProcessorStyle::*;
 
@@ -37,7 +39,6 @@ use ProcessorState::*;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ProcStateTransition {
-    NoChange,
     ChangeOrder(AntiderivativeOrder),
     ChangeStyle(ProcessorStyle),
 }
@@ -47,46 +48,113 @@ type H = fn(f64) -> f64;
 type H1 = fn(f64) -> f64;
 type H2 = fn(f64) -> f64;
 
+const ONE_SIXTH: f64 = 1.0 / 6.0;
+
 #[derive(Debug, Copy, Clone)]
-struct ProcState {
+pub struct ProcState {
     x1: f64,
     x2: f64,
     d2: f64,
     ad1_x1: f64,
     ad2_x0: f64,
     ad2_x1: f64,
-    nl_func: H,
-    nl_func_ad1: H1,
-    nl_func_ad2: H2,
+    pub nl_func: H,
+    pub nl_func_ad1: H1,
+    pub nl_func_ad2: H2,
 }
 
 impl ProcState {
+    const SOFT_CLIP: H = |x| {
+        let x32: f32 = x as f32;
+        let ex = exp_raw(-x32);
+        let signum: f32 = x32.signum();
+        let is_pos: f32 = (signum + 1.0) / 2.0;
+        let is_neg: f32 = ((signum - 1.0) / 2.0).abs();
+        ((is_pos * (-ex + 1.0)) + (is_neg * (ex - 1.0))) as f64
+    };
+
+    const SOFT_CLIP_AD1: H = |x| {
+        let x32: f32 = x as f32;
+        let ex = exp_raw(-x32);
+        let signum: f32 = x32.signum();
+        let is_pos: f32 = (signum + 1.0) / 2.0;
+        let is_neg: f32 = ((signum - 1.0) / 2.0).abs();
+        ((is_pos * (-ex + x32)) + (is_neg * (-ex - x32))) as f64
+    };
+
+    const SOFT_CLIP_AD2: H = |x| x;
+
+    const TANH: fn(f64) -> f64 = |x| ((2.0 / (1.0 + (-2.0 * exp_raw(x as f32) as f64))) - 1.0);
+
+    const TANH_AD1: fn(f64) -> f64 = |x| ((x as f32).cosh().ln()) as f64;
+
     #[inline]
-    fn tanh_ad2(x: f64) -> f64 {
+    fn li2(x: f32) -> f32 {
+        let z2 = PI * PI / 6.0_f32;
+        #[inline]
+        fn approx(x: f32) -> f32 {
+            let cp = [1.00000020_f32, -0.780790946_f32, 0.0648256871_f32];
+            let cq = [1.00000000_f32, -1.03077545_f32, 0.211216710_f32];
+
+            let p = cp[0] + x * (cp[1] + x * cp[2]);
+            let q = cq[0] + x * (cq[1] + x * cq[2]);
+
+            x * p / q
+        }
+
+        match x {
+            x if x < -1.0 => {
+                let l = (1.0 - x).ln();
+                approx(1.0 / (1.0 - x)) - z2 + l * (0.5 * l - (-x).ln())
+            }
+            x if x == -1.0 => -0.5 * z2,
+            x if x < 0.0 => {
+                let l = (-x).ln_1p();
+                -approx(x / (x - 1.0)) - 0.5 * l * l
+            }
+            x if x == 0.0 => x,
+            x if x < 0.5 => approx(x),
+            x if x < 1.0 => -(approx(1.0 - x)) + z2 - x.ln() * (-x).ln_1p(),
+            x if x == 1.0 => z2,
+            x if x < 2.0 => {
+                let l = x.ln();
+                approx(1.0 - 1. / x) + z2 - l * ((1.0 - 1.0 / x).ln() + 0.5 * l)
+            }
+            _ => {
+                let l = x.ln();
+                -approx(1.0 / x) + 2.0 * z2 - 0.5 * l * l
+            }
+        }
+    }
+
+    const TANH_AD2: fn(f64) -> f64 = |x| {
         let expval = (-2. * x).exp();
-        0.5 * (Li2::li2(&(-expval)) - x * (x + 2.0 * (expval + 1.).ln() - 2.0 * x.cosh().ln()))
-            + (PI.powi(2) / 24.0)
-    }
+        0.5 * (ProcState::li2(-expval as f32) as f64
+            - x * (x + 2.0 * (expval + 1.).ln() - 2.0 * x.cosh().ln()))
+            + (core::f64::consts::PI.powi(2) / 24.0)
+    };
 
-    #[inline]
-    fn hard_clip_ad1(val: f64) -> f64 {
-        if val.abs() <= 1.0 {
-            0.5 * val.powi(2)
-        } else {
-            (val * val.signum()) - 0.5
-        }
-    }
+    const HARD_CLIP: fn(f64) -> f64 = |x| x.clamp(-1.0, 1.0);
 
-    #[inline]
-    fn hard_clip_ad2(val: f64) -> f64 {
-        if val.abs() <= 1. {
-            val.powi(3) * (1. / 6.)
-        } else {
-            (((val.powi(2) * 0.5) + (1. / 6.)) * val.signum()) - (val * 0.5)
-        }
-    }
+    const HARD_CLIP_AD1: fn(f64) -> f64 = |val| {
+        let abs_val = val.abs();
+        let clip = (abs_val - 1.).max(0.0);
+        0.5 * (val * val - clip * clip)
+    };
 
-    fn first_order_tanh() -> ProcState {
+    const HARD_CLIP_AD2: fn(f64) -> f64 = |val| {
+        let abs_val = val.abs();
+        let sign_val = val.signum();
+        let is_within_range: f64 = if abs_val <= 1.0 { 1.0 } else { 0.0 };
+        let is_outside_range = (is_within_range - 1.0).abs();
+
+        let within_range = val.powi(3) * ONE_SIXTH;
+        let outside_range = (((val.powi(2) * 0.5) + ONE_SIXTH) * sign_val) - (val * 0.5);
+
+        is_within_range * within_range + is_outside_range * outside_range
+    };
+
+    pub fn first_order_tanh() -> ProcState {
         ProcState {
             x1: 0.0,
             x2: 0.0,
@@ -94,13 +162,13 @@ impl ProcState {
             ad1_x1: 0.0,
             ad2_x0: 0.0,
             ad2_x1: 0.0,
-            nl_func: |x| x.tanh(),
-            nl_func_ad1: |x| x.cosh().ln(),
+            nl_func: ProcState::TANH,
+            nl_func_ad1: ProcState::TANH_AD1,
             nl_func_ad2: |x| x,
         }
     }
 
-    fn second_order_tanh() -> ProcState {
+    pub fn second_order_tanh() -> ProcState {
         ProcState {
             x1: 0.0,
             x2: 0.0,
@@ -108,13 +176,13 @@ impl ProcState {
             ad1_x1: 0.0,
             ad2_x0: 0.0,
             ad2_x1: 0.0,
-            nl_func: |x| x.tanh(),
-            nl_func_ad1: |x| x.cosh().ln(),
-            nl_func_ad2: |x| ProcState::tanh_ad2(x),
+            nl_func: ProcState::TANH,
+            nl_func_ad1: ProcState::TANH_AD1,
+            nl_func_ad2: ProcState::TANH_AD2,
         }
     }
 
-    fn first_order_hard_clip() -> ProcState {
+    pub fn first_order_hard_clip() -> ProcState {
         ProcState {
             x1: 0.0,
             x2: 0.0,
@@ -122,13 +190,13 @@ impl ProcState {
             ad1_x1: 0.0,
             ad2_x0: 0.0,
             ad2_x1: 0.0,
-            nl_func: |x| x.clamp(-1.0, 1.0),
-            nl_func_ad1: |x| ProcState::hard_clip_ad1(x),
+            nl_func: ProcState::HARD_CLIP,
+            nl_func_ad1: ProcState::HARD_CLIP_AD1,
             nl_func_ad2: |x| x,
         }
     }
 
-    fn second_order_hard_clip() -> ProcState {
+    pub fn second_order_hard_clip() -> ProcState {
         ProcState {
             x1: 0.0,
             x2: 0.0,
@@ -136,9 +204,37 @@ impl ProcState {
             ad1_x1: 0.0,
             ad2_x0: 0.0,
             ad2_x1: 0.0,
-            nl_func: |x| x.clamp(-1.0, 1.0),
-            nl_func_ad1: |x| ProcState::hard_clip_ad1(x),
-            nl_func_ad2: |x| ProcState::hard_clip_ad2(x),
+            nl_func: ProcState::HARD_CLIP,
+            nl_func_ad1: ProcState::HARD_CLIP_AD1,
+            nl_func_ad2: ProcState::HARD_CLIP_AD2,
+        }
+    }
+
+    pub fn first_order_soft_clip() -> ProcState {
+        ProcState {
+            x1: 0.0,
+            x2: 0.0,
+            d2: 0.0,
+            ad1_x1: 0.0,
+            ad2_x0: 0.0,
+            ad2_x1: 0.0,
+            nl_func: ProcState::SOFT_CLIP,
+            nl_func_ad1: ProcState::SOFT_CLIP_AD1,
+            nl_func_ad2: |x| x,
+        }
+    }
+
+    pub fn second_order_soft_clip() -> ProcState {
+        ProcState {
+            x1: 0.0,
+            x2: 0.0,
+            d2: 0.0,
+            ad1_x1: 0.0,
+            ad2_x0: 0.0,
+            ad2_x1: 0.0,
+            nl_func: ProcState::SOFT_CLIP,
+            nl_func_ad1: ProcState::SOFT_CLIP_AD1,
+            nl_func_ad2: ProcState::SOFT_CLIP_AD2,
         }
     }
 }
@@ -176,6 +272,22 @@ impl ADAA {
 
     fn second_order_hard_clip() -> ADAA {
         let new_state = ProcState::second_order_hard_clip();
+        ADAA {
+            current_proc_state: new_state,
+            proc_alg: |x: f64, y: &mut ProcState| ADAA::process_second_order(y, x),
+        }
+    }
+
+    fn first_order_soft_clip() -> ADAA {
+        let new_state = ProcState::first_order_soft_clip();
+        ADAA {
+            current_proc_state: new_state,
+            proc_alg: |x: f64, y: &mut ProcState| ADAA::process_second_order(y, x),
+        }
+    }
+
+    fn second_order_soft_clip() -> ADAA {
+        let new_state = ProcState::second_order_soft_clip();
         ADAA {
             current_proc_state: new_state,
             proc_alg: |x: f64, y: &mut ProcState| ADAA::process_second_order(y, x),
@@ -255,14 +367,14 @@ impl NonlinearProcessor {
                 State(HardClip, SecondOrder) => ADAA::second_order_hard_clip(),
                 State(Tanh, FirstOrder) => ADAA::first_order_tanh(),
                 State(Tanh, SecondOrder) => ADAA::second_order_tanh(),
+                State(SoftClip, FirstOrder) => ADAA::first_order_soft_clip(),
+                State(SoftClip, SecondOrder) => ADAA::second_order_soft_clip(),
             },
         }
     }
 
     pub fn change_state(&mut self, transition: ProcStateTransition) {
-        nih_dbg!("Changing State!");
         match (self.state, transition) {
-            (_, NoChange) => (),
             (State(old_style, _), ChangeOrder(new_order)) => {
                 self.reset_with_new_state(State(old_style, new_order))
             }
@@ -274,18 +386,14 @@ impl NonlinearProcessor {
 
     pub fn compare_and_change_state(&mut self, other_state: ProcessorState) {
         match (self.state, other_state) {
-            (State(Tanh, _), State(HardClip, _)) => self.change_state(ChangeStyle(HardClip)),
-            (State(HardClip, _), State(Tanh, _)) => self.change_state(ChangeStyle(Tanh)),
-            (_, _) => (),
-        }
-        match (self.state, other_state) {
-            (State(_, FirstOrder), State(_, SecondOrder)) => {
-                self.change_state(ChangeOrder(SecondOrder))
+            (State(current_state, current_order), State(new_state, new_order)) => {
+                if current_state != new_state {
+                    self.change_state(ChangeStyle(new_state));
+                }
+                if current_order != new_order {
+                    self.change_state(ChangeOrder(new_order));
+                }
             }
-            (State(_, SecondOrder), State(_, FirstOrder)) => {
-                self.change_state(ChangeOrder(FirstOrder))
-            }
-            (_, _) => (),
         }
     }
 
@@ -295,6 +403,8 @@ impl NonlinearProcessor {
             State(HardClip, SecondOrder) => self.initialize_as_second_order_hc(),
             State(Tanh, FirstOrder) => self.initialize_as_first_order_tanh(),
             State(Tanh, SecondOrder) => self.initialize_as_second_order_tanh(),
+            State(SoftClip, FirstOrder) => self.initialize_as_first_order_soft_clip(),
+            State(SoftClip, SecondOrder) => self.initialize_as_second_order_soft_clip(),
         }
     }
 
@@ -320,6 +430,16 @@ impl NonlinearProcessor {
     fn initialize_as_second_order_tanh(&mut self) {
         self.state = State(Tanh, SecondOrder);
         self.proc = ADAA::second_order_tanh();
+    }
+
+    fn initialize_as_first_order_soft_clip(&mut self) {
+        self.state = State(SoftClip, FirstOrder);
+        self.proc = ADAA::first_order_soft_clip();
+    }
+
+    fn initialize_as_second_order_soft_clip(&mut self) {
+        self.state = State(SoftClip, SecondOrder);
+        self.proc = ADAA::second_order_soft_clip();
     }
 }
 
