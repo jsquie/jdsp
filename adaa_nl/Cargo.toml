@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-fast_math = "0.1.1"
+fast-math = "0.1.1"
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" } 
