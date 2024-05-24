@@ -81,9 +81,9 @@ impl ProcState {
 
     const SOFT_CLIP_X2_AD2: H = |x| {
         if x >= 0.0 {
-            (x + 1.).abs().ln() + (x.powi(2) / 2.) + x
+            (x + 1.).abs().ln() + (x.powi(2) / 2.)
         } else {
-            -(-x + 1.).abs().ln() - (x.powi(2) / 2.) + x
+            -(-x + 1.).abs().ln() - (x.powi(2) / 2.)
         }
     };
 
@@ -178,7 +178,7 @@ impl ProcState {
             x1: 0.0,
             x2: 0.0,
             d2: 0.0,
-            ad1_x1: 0.0,
+            ad1_x1: -1.0,
             ad2_x0: 0.0,
             ad2_x1: 0.0,
             nl_func: ProcState::SOFT_CLIP_X2,
@@ -191,7 +191,7 @@ impl ProcState {
         ProcState {
             x1: 0.0,
             x2: 0.0,
-            d2: 0.0,
+            d2: -1.0,
             ad1_x1: 0.0,
             ad2_x0: 0.0,
             ad2_x1: 0.0,
@@ -215,6 +215,17 @@ impl ADAA {
         |x: f64, y: &mut ProcState| ADAA::process_first_order(y, x);
     const PROCESS_SECOND_ORDER: ProcAlg =
         |x: f64, y: &mut ProcState| ADAA::process_second_order(y, x);
+
+    fn from_nl_state(nl_state: ProcessorState) -> Self {
+        match nl_state {
+            State(Tanh, FirstOrder) => ADAA::first_order_tanh(),
+            State(Tanh, SecondOrder) => ADAA::second_order_tanh(),
+            State(HardClip, FirstOrder) => ADAA::first_order_hard_clip(),
+            State(HardClip, SecondOrder) => ADAA::second_order_hard_clip(),
+            State(SoftClipX2, FirstOrder) => ADAA::first_order_soft_clip(),
+            State(SoftClipX2, SecondOrder) => ADAA::second_order_soft_clip(),
+        }
+    }
 
     fn first_order_tanh() -> ADAA {
         let new_state = ProcState::first_order_tanh();
@@ -319,6 +330,9 @@ impl ADAA {
 pub struct NonlinearProcessor {
     state: ProcessorState,
     proc: ADAA,
+    target_state: Option<ProcStateTransition>,
+    target_proc: Option<ADAA>,
+    fade: Option<f32>,
 }
 
 impl NonlinearProcessor {
@@ -326,89 +340,80 @@ impl NonlinearProcessor {
         NonlinearProcessor {
             state: State(HardClip, FirstOrder),
             proc: ADAA::first_order_hard_clip(),
+            target_state: None,
+            target_proc: None,
+            fade: None,
         }
     }
 
     pub fn from_state(new_state: ProcessorState) -> Self {
         NonlinearProcessor {
             state: new_state,
-            proc: match new_state {
-                State(HardClip, FirstOrder) => ADAA::first_order_hard_clip(),
-                State(HardClip, SecondOrder) => ADAA::second_order_hard_clip(),
-                State(Tanh, FirstOrder) => ADAA::first_order_tanh(),
-                State(Tanh, SecondOrder) => ADAA::second_order_tanh(),
-                State(SoftClipX2, FirstOrder) => ADAA::first_order_soft_clip(),
-                State(SoftClipX2, SecondOrder) => ADAA::second_order_soft_clip(),
-            },
+            proc: ADAA::from_nl_state(new_state),
+            target_state: None,
+            target_proc: None,
+            fade: None,
         }
     }
 
     pub fn change_state(&mut self, transition: ProcStateTransition) {
-        match (self.state, transition) {
-            (State(old_style, _), ChangeOrder(new_order)) => {
-                self.reset_with_new_state(State(old_style, new_order))
-            }
-            (State(_, old_order), ChangeStyle(new_style)) => {
-                self.reset_with_new_state(State(new_style, old_order))
-            }
+        self.state = match (&self.state, transition) {
+            (State(_, old_order), ChangeStyle(new_style)) => State(new_style, *old_order),
+            (State(old_style, _), ChangeOrder(new_order)) => State(*old_style, new_order),
+            // (_, _) => panic!("Not allowed transition"),
         };
+        self.target_state = None;
+        self.proc = self.target_proc.unwrap();
+        self.target_proc = None;
+        self.fade = None;
+
+        /*
+                match (self.state, transition) {
+                    (State(old_style, _), ChangeOrder(new_order)) => {
+                        self.reset_with_new_state(State(old_style, new_order))
+                    }
+                    (State(_, old_order), ChangeStyle(new_style)) => {
+                        self.reset_with_new_state(State(new_style, old_order))
+                    }
+                };
+        */
     }
 
     pub fn compare_and_change_state(&mut self, other_state: ProcessorState) {
+        self.begin_fade_out();
+
         match (self.state, other_state) {
             (State(current_state, current_order), State(new_state, new_order)) => {
                 if current_state != new_state {
-                    self.change_state(ChangeStyle(new_state));
+                    self.target_state = Some(ChangeStyle(new_state));
                 }
                 if current_order != new_order {
-                    self.change_state(ChangeOrder(new_order));
+                    self.target_state = Some(ChangeOrder(new_order));
                 }
             }
         }
     }
 
-    fn reset_with_new_state(&mut self, new_state: ProcessorState) {
-        match new_state {
-            State(HardClip, FirstOrder) => self.initialize_as_first_order_hc(),
-            State(HardClip, SecondOrder) => self.initialize_as_second_order_hc(),
-            State(Tanh, FirstOrder) => self.initialize_as_first_order_tanh(),
-            State(Tanh, SecondOrder) => self.initialize_as_second_order_tanh(),
-            State(SoftClipX2, FirstOrder) => self.initialize_as_first_order_soft_clip_x2(),
-            State(SoftClipX2, SecondOrder) => self.initialize_as_second_order_soft_clip_x2(),
-        }
+    fn begin_fade_out(&mut self) {
+        self.fade_out = Some(1.0);
     }
+
+    /*
+    fn reset_with_new_state(&mut self, new_state: ProcessorState) {
+        self.proc = ADAA::from_nl_state(new_state);
+        self.state = new_state;
+    }
+    */
 
     pub fn process(&mut self, val: f32) -> f32 {
-        self.proc.process(val as f64)
-    }
+        let mut nl_processed = self.proc.process(val as f64) as f32;
 
-    fn initialize_as_first_order_hc(&mut self) {
-        self.state = State(HardClip, FirstOrder);
-        self.proc = ADAA::first_order_hard_clip();
-    }
+        if let Some(f) = self.fade_out {
+            nl_processed *= f;
+            self.fade_out = f - 0.001;
+        }
 
-    fn initialize_as_second_order_hc(&mut self) {
-        self.state = State(HardClip, SecondOrder);
-        self.proc = ADAA::second_order_hard_clip();
-    }
-
-    fn initialize_as_first_order_tanh(&mut self) {
-        self.state = State(Tanh, FirstOrder);
-        self.proc = ADAA::first_order_tanh();
-    }
-    fn initialize_as_second_order_tanh(&mut self) {
-        self.state = State(Tanh, SecondOrder);
-        self.proc = ADAA::second_order_tanh();
-    }
-
-    fn initialize_as_first_order_soft_clip_x2(&mut self) {
-        self.state = State(SoftClipX2, FirstOrder);
-        self.proc = ADAA::first_order_soft_clip();
-    }
-
-    fn initialize_as_second_order_soft_clip_x2(&mut self) {
-        self.state = State(SoftClipX2, SecondOrder);
-        self.proc = ADAA::second_order_soft_clip();
+        nl_processed
     }
 }
 
