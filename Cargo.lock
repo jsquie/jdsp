@@ -6,6 +6,7 @@ version = 3
 name = "adaa_nl"
 version = "0.1.0"
 dependencies = [
+ "envelope",
  "fast-math",
  "nih_plug",
  "polylog",
@@ -406,6 +407,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3dca9240753cf90908d7e4aac30f630662b02aebaa1b58a3cadabdb23385b58b"
 
 [[package]]
+name = "envelope"
+version = "0.1.0"
+dependencies = [
+ "float-cmp",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -428,6 +436,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2465292146cdfc2011350fe3b1c616ac83cf0faeedb33463ba1c332ed8948d66"
 dependencies = [
  "ieee754",
+]
+
+[[package]]
+name = "float-cmp"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]

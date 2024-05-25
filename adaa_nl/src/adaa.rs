@@ -1,3 +1,4 @@
+use envelope::{Env, LinearEnvelope};
 use polylog::Li2;
 
 use nih_plug::prelude::*;
@@ -330,9 +331,9 @@ impl ADAA {
 pub struct NonlinearProcessor {
     state: ProcessorState,
     proc: ADAA,
-    target_state: Option<ProcStateTransition>,
-    target_proc: Option<ADAA>,
-    fade: Option<f32>,
+    fade_out: Option<LinearEnvelope>,
+    fade_in: Option<LinearEnvelope>,
+    saved_transition: Option<ProcStateTransition>,
 }
 
 impl NonlinearProcessor {
@@ -340,9 +341,9 @@ impl NonlinearProcessor {
         NonlinearProcessor {
             state: State(HardClip, FirstOrder),
             proc: ADAA::first_order_hard_clip(),
-            target_state: None,
-            target_proc: None,
-            fade: None,
+            fade_out: None,
+            fade_in: Some(LinearEnvelope::fade_in(100)),
+            saved_transition: None,
         }
     }
 
@@ -350,9 +351,9 @@ impl NonlinearProcessor {
         NonlinearProcessor {
             state: new_state,
             proc: ADAA::from_nl_state(new_state),
-            target_state: None,
-            target_proc: None,
-            fade: None,
+            fade_out: None,
+            fade_in: Some(LinearEnvelope::fade_in(100)),
+            saved_transition: None,
         }
     }
 
@@ -360,60 +361,46 @@ impl NonlinearProcessor {
         self.state = match (&self.state, transition) {
             (State(_, old_order), ChangeStyle(new_style)) => State(new_style, *old_order),
             (State(old_style, _), ChangeOrder(new_order)) => State(*old_style, new_order),
-            // (_, _) => panic!("Not allowed transition"),
         };
-        self.target_state = None;
-        self.proc = self.target_proc.unwrap();
-        self.target_proc = None;
-        self.fade = None;
-
-        /*
-                match (self.state, transition) {
-                    (State(old_style, _), ChangeOrder(new_order)) => {
-                        self.reset_with_new_state(State(old_style, new_order))
-                    }
-                    (State(_, old_order), ChangeStyle(new_style)) => {
-                        self.reset_with_new_state(State(new_style, old_order))
-                    }
-                };
-        */
+        self.saved_transition = None;
+        self.proc = ADAA::from_nl_state(self.state);
     }
 
     pub fn compare_and_change_state(&mut self, other_state: ProcessorState) {
-        self.begin_fade_out();
-
         match (self.state, other_state) {
-            (State(current_state, current_order), State(new_state, new_order)) => {
-                if current_state != new_state {
-                    self.target_state = Some(ChangeStyle(new_state));
+            (State(current_style, current_order), State(new_style, new_order)) => {
+                if current_style != new_style {
+                    self.saved_transition = Some(ChangeStyle(new_style));
+                    self.fade_out = Some(LinearEnvelope::fade_out(100));
+                    // self.change_state(ChangeStyle(new_style));
                 }
                 if current_order != new_order {
-                    self.target_state = Some(ChangeOrder(new_order));
+                    self.saved_transition = Some(ChangeOrder(new_order));
+                    self.fade_out = Some(LinearEnvelope::fade_out(100));
+                    // self.change_state(ChangeOrder(new_order));
                 }
             }
         }
     }
 
-    fn begin_fade_out(&mut self) {
-        self.fade_out = Some(1.0);
-    }
-
-    /*
-    fn reset_with_new_state(&mut self, new_state: ProcessorState) {
-        self.proc = ADAA::from_nl_state(new_state);
-        self.state = new_state;
-    }
-    */
-
     pub fn process(&mut self, val: f32) -> f32 {
-        let mut nl_processed = self.proc.process(val as f64) as f32;
-
-        if let Some(f) = self.fade_out {
-            nl_processed *= f;
-            self.fade_out = f - 0.001;
+        let mut nl_process = self.proc.process(val as f64) as f32;
+        assert!(!(self.fade_in.is_some() && self.fade_out.is_some()));
+        if let Some(env) = &mut self.fade_out {
+            nl_process *= env.consume();
+            if env.target_reached() {
+                self.change_state(self.saved_transition.unwrap());
+                self.fade_in = Some(LinearEnvelope::fade_in(100));
+                self.fade_out = None;
+            }
         }
-
-        nl_processed
+        if let Some(env) = &mut self.fade_in {
+            nl_process *= env.consume();
+            if env.target_reached() {
+                self.fade_in = None;
+            }
+        }
+        nl_process
     }
 }
 

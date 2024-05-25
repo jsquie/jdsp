@@ -7,3 +7,4 @@ edition = "2021"
 fast-math = "0.1.1"
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" } 
 polylog = "2.6.0"
+envelope = { path = "../envelope" }
