@@ -56,7 +56,7 @@ impl Env for LinearEnvelope {
     }
 
     fn target_reached(&self) -> bool {
-        self.current_value == self.target_value
+        self.num_steps == 0
     }
 }
 
@@ -102,7 +102,7 @@ impl Env for ExponentialEnvelope {
     }
 
     fn target_reached(&self) -> bool {
-        self.current_value == self.target_value
+        self.curr_step == self.tot_steps
     }
 }
 
