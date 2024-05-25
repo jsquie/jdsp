@@ -6,6 +6,10 @@ use nih_plug::prelude::*;
 use crate::oversample::oversample_stage::OversampleStage;
 
 const MAX_OVER_SAMPLE_FACTOR: usize = 4;
+const STAGE_1_KERNEL_SIZE: usize = 64;
+const STAGE_2_KERNEL_SIZE: usize = 32;
+const STAGE_3_KERNEL_SIZE: usize = 16;
+const STAGE_4_KERNEL_SIZE: usize = 8;
 
 #[derive(Enum, Debug, Copy, Clone, PartialEq)]
 pub enum OversampleFactor {
@@ -24,63 +28,100 @@ pub enum OversampleFactor {
 }
 
 enum SampleRole {
-    UpSample,
-    DownSample,
+    UpSampleStage,
+    DownSampleStage,
+}
+use SampleRole::*;
+
+pub struct OversampleBuilder {
+    max_buff_size: usize,
+    up_stages: Option<[OversampleStage; MAX_OVER_SAMPLE_FACTOR]>,
+    down_stages: Option<[OversampleStage; MAX_OVER_SAMPLE_FACTOR]>,
+}
+
+impl OversampleBuilder {
+    pub fn new(buff_size: usize) -> Self {
+        OversampleBuilder {
+            max_buff_size: buff_size,
+            up_stages: None,
+            down_stages: None,
+        }
+    }
+
+    pub fn build_up_stages(&mut self) -> &mut self {
+        unimplemented!();
+        self
+    }
+
+    pub fn build_down_stages(&mut self) -> &mut self {
+        unimplemented!();
+        self
+    }
+
+    pub fn build(&self) -> Oversample {
+        unimplemented!();
+    }
 }
 
 #[derive(Debug)]
 pub struct Oversample {
     factor: OversampleFactor,
-    up_stages: [Option<OversampleStage>; MAX_OVER_SAMPLE_FACTOR],
-    down_stages: [Option<OversampleStage>; MAX_OVER_SAMPLE_FACTOR],
+    up_stages: [OversampleStage; MAX_OVER_SAMPLE_FACTOR],
+    down_stages: [OversampleStage; MAX_OVER_SAMPLE_FACTOR],
     initial_buff_size: usize,
 }
 
 impl Oversample {
     pub fn new(initial_factor: OversampleFactor, init_buff_size: usize) -> Self {
+        todo!("Replace all of this in builder -- along with sized oversampling stages")
         Oversample {
             factor: initial_factor,
-            up_stages: [None, None, None, None],
-            down_stages: [None, None, None, None],
+            up_stages: [
+                OversampleStage::new(
+                    init_buff_size * (2_u32.pow(1) as usize),
+                    UpSampleStage,
+                    STAGE_1_KERNEL_SIZE,
+                ),
+                OversampleStage::new(
+                    init_buff_size * (2_u32.pow(2) as usize),
+                    UpSampleStage,
+                    STAGE_2_KERNEL_SIZE,
+                ),
+                OversampleStage::new(
+                    init_buff_size * (2_u32.pow(3) as usize),
+                    UpSampleStage,
+                    STAGE_3_KERNEL_SIZE,
+                ),
+                OversampleStage::new(
+                    init_buff_size * (2_u32.pow(4) as usize),
+                    UpSampleStage,
+                    STAGE_4_KERNEL_SIZE,
+                ),
+            ],
+            down_stages: [
+                OversampleStage::new(
+                    init_buff_size * (2_u32.pow((MAX_OVER_SAMPLE_FACTOR as u32) - 1) as usize),
+                    DownSampleStage,
+                    STAGE_1_KERNEL_SIZE,
+                ),
+                OversampleStage::new(
+                    init_buff_size * (2_u32.pow((MAX_OVER_SAMPLE_FACTOR as u32) - 2) as usize),
+                    DownSampleStage,
+                    STAGE_2_KERNEL_SIZE,
+                ),
+                OversampleStage::new(
+                    init_buff_size * (2_u32.pow((MAX_OVER_SAMPLE_FACTOR as u32) - 3) as usize),
+                    DownSampleStage,
+                    STAGE_3_KERNEL_SIZE,
+                ),
+                OversampleStage::new(
+                    init_buff_size * (2_u32.pow((MAX_OVER_SAMPLE_FACTOR as u32) - 4) as usize),
+                    DownSampleStage,
+                    STAGE_4_KERNEL_SIZE,
+                ),
+            ],
             initial_buff_size: init_buff_size,
         }
-    }
-
-    #[cold]
-    pub fn initialize_oversample_stages(&mut self) {
-        self.up_stages
-            .iter_mut()
-            .enumerate()
-            .for_each(|(factor, stage)| {
-                *stage = Some(OversampleStage::new(
-                    self.initial_buff_size * (2_u32.pow(factor as u32 + 1) as usize),
-                    SampleRole::UpSample,
-                ))
-            });
-
-        self.down_stages
-            .iter_mut()
-            .enumerate()
-            .for_each(|(factor, stage)| {
-                *stage = Some(OversampleStage::new(
-                    self.initial_buff_size
-                        * (2_u32.pow((MAX_OVER_SAMPLE_FACTOR as u32) - (factor as u32 + 1))
-                            as usize),
-                    SampleRole::DownSample,
-                ))
-            });
-
-        self.up_stages.iter_mut().for_each(|s| {
-            if let Some(stage) = s {
-                stage.initialize_kernel()
-            }
-        });
-
-        self.down_stages.iter_mut().for_each(|s| {
-            if let Some(stage) = s {
-                stage.initialize_kernel()
-            }
-        });
     }
 
     pub fn get_oversample_factor(&self) -> OversampleFactor {
@@ -97,12 +138,8 @@ impl Oversample {
             .iter_mut()
             .zip(self.down_stages.iter_mut())
             .for_each(|(u, d)| {
-                if let Some(up) = u {
-                    up.reset()
-                };
-                if let Some(down) = d {
-                    down.reset()
-                };
+                u.reset();
+                d.reset();
             });
     }
 
@@ -114,10 +151,9 @@ impl Oversample {
             .iter_mut()
             .take(self.factor as usize)
             .for_each(|s| {
-                if let Some(stage) = s {
-                    stage.process_up(last_stage);
-                    last_stage = &mut stage.data;
-                }
+                    s.process_up(last_stage);
+                    last_stage = &mut s.data;
+                
             });
 
         output
@@ -138,10 +174,8 @@ impl Oversample {
             .take(self.factor as usize)
             .rev()
             .for_each(|s| {
-                if let Some(stage) = s {
-                    stage.process_down(last_stage);
-                    last_stage = &mut stage.data;
-                }
+                    s.process_down(last_stage);
+                    last_stage = &mut s.data;
             });
 
         output

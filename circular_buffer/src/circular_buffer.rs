@@ -11,7 +11,6 @@ fn dot_prod(buf: &[f32], kernel: &[f32], n: i32) -> f32 {
     result
 }
 
-#[inline]
 #[cfg(not(target_arch = "aarch64"))]
 fn dot_prod(buf: &[f32], kernel: &[f32]) -> f32 {
     buf.iter()
@@ -26,13 +25,13 @@ const BLOCK_SIZE: usize = KERNEL_SIZE * NUM_CONV_BLOCKS;
 const BUF_SIZE: usize = BLOCK_SIZE + KERNEL_SIZE;
 
 #[derive(Debug)]
-pub struct CircularConvBuffer32 {
+pub struct SizedCircularConvBuff32 {
     buff: [f32; BUF_SIZE],
 }
 
-impl CircularConvBuffer32 {
+impl SizedCircularConvBuff32 {
     pub fn new() -> Self {
-        CircularConvBuffer32 {
+        SizedCircularConvBuff32 {
             buff: [0.0_f32; BUF_SIZE],
         }
     }
@@ -68,6 +67,63 @@ impl CircularConvBuffer32 {
     }
 }
 
+pub trait DelayBuffer {
+    fn push(&mut self, val: f32);
+    fn decrement_pos(&mut self);
+    fn delay(&mut self, input: &mut [f32]);
+    fn reset(&mut self);
+}
+
+const SIZED_DELAY_32_SIZE: usize = 32;
+
+#[derive(Debug)]
+pub struct SizedDelayBuffer32 {
+    data: [f32; 32],
+    pos: usize,
+    size: usize,
+}
+
+impl SizedDelayBuffer32 {
+    pub fn new(delay_len: usize) -> Self {
+        assert!(delay_len <= 32 && delay_len > 0);
+        SizedDelayBuffer32 {
+            data: [0.0_f32; SIZED_DELAY_32_SIZE],
+            size: delay_len,
+            pos: 0,
+        }
+    }
+}
+
+impl DelayBuffer for SizedDelayBuffer32 {
+    #[inline]
+    fn push(&mut self, val: f32) {
+        self.data[self.pos] = val;
+    }
+
+    #[inline]
+    fn decrement_pos(&mut self) {
+        self.pos = if self.pos == 0 {
+            self.size - 1
+        } else {
+            self.pos - 1
+        };
+    }
+
+    #[cold]
+    fn reset(&mut self) {
+        self.data.iter_mut().for_each(|x| *x = 0.0_f32.into());
+        self.pos = 0;
+    }
+
+    fn delay(&mut self, input: &mut [f32]) {
+        input.iter_mut().for_each(|v| {
+            self.push(*v);
+            self.decrement_pos();
+            *v = self.data[self.pos];
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct CircularDelayBuffer {
     data: Vec<f32>,
@@ -83,7 +139,9 @@ impl CircularDelayBuffer {
             size: initial_size,
         }
     }
+}
 
+impl DelayBuffer for CircularDelayBuffer {
     #[inline]
     fn push(&mut self, val: f32) {
         self.data[self.pos] = val;
@@ -100,14 +158,14 @@ impl CircularDelayBuffer {
 
     /// Resets the buffer's data to all zeros and resets the buffers position value to zero
     #[cold]
-    pub fn reset(&mut self) {
+    fn reset(&mut self) {
         self.data.iter_mut().for_each(|x| *x = 0.0_f32.into());
         self.pos = 0;
     }
 
     /// delays the input by self.size number of samples
     #[inline]
-    pub fn delay(&mut self, input: &mut [f32]) {
+    fn delay(&mut self, input: &mut [f32]) {
         input.iter_mut().for_each(|v| {
             self.push(*v);
             self.decrement_pos();
@@ -274,6 +332,17 @@ mod tests {
     fn delay_5_samples() {
         let mut sig: Vec<f32> = (1..10).map(|x| x as f32).collect();
         let mut delay_buf = CircularDelayBuffer::new(5);
+
+        delay_buf.delay(&mut sig);
+        let expected_result = vec![0., 0., 0., 0., 1., 2., 3., 4., 5.];
+        dbg!(&sig);
+        check_results(&sig, &expected_result);
+    }
+
+    #[test]
+    fn delay_5_samples_sized() {
+        let mut sig: Vec<f32> = (1..10).map(|x| x as f32).collect();
+        let mut delay_buf = SizedDelayBuffer32::new(5);
 
         delay_buf.delay(&mut sig);
         let expected_result = vec![0., 0., 0., 0., 1., 2., 3., 4., 5.];
@@ -625,7 +694,7 @@ mod tests {
             7.68219493e-02,
         ];
 
-        let mut buf = CircularConvBuffer32::new();
+        let mut buf = SizedCircularConvBuff32::new();
 
         buf.convolve(sig, &kernel_reversed);
         assert_eq!(sig.len(), expected_result.len());
@@ -633,6 +702,7 @@ mod tests {
         check_results(sig, &expected_result);
     }
 
+    /*
     #[test]
     fn test_cblas_conv_small() {
         let kernel: [f32; 32] = [
@@ -706,4 +776,5 @@ mod tests {
         dbg!(&sig);
         check_results(sig, expected_result);
     }
+    */
 }

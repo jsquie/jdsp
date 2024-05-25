@@ -1,38 +1,41 @@
 use crate::oversample::os_filter_constants::*;
 use crate::oversample::SampleRole;
-use circular_buffer::circular_buffer::{CircularConvBuffer32, CircularDelayBuffer};
+use circular_buffer::circular_buffer::{DelayBuffer, SizedCircularConvBuff32, SizedDelayBuffer32};
 
 #[derive(Debug)]
-pub struct OversampleStage {
-    filter_buff: CircularConvBuffer32,
-    delay_buff: CircularDelayBuffer,
-    kernel: [f32; 32],
+pub struct OversampleStage<const CAP: usize> {
+    filter_buff: SizedCircularConvBuff32,
+    delay_buff: SizedDelayBuffer32,
+    kernel: [f32; CAP],
     pub data: Vec<f32>,
     scratch_buff: Vec<f32>,
     delay_coef: Option<f32>,
 }
 
-impl OversampleStage {
-    pub fn new(target_size: usize, role: SampleRole) -> Self {
+impl<const CAP: usize> OversampleStage<CAP> {
+    const CAPACITY: usize = CAP;
+
+    pub fn new(target_size: usize, role: SampleRole, _kernel_size: usize) -> Self {
+        todo!("implement kernel_size as parameter");
         OversampleStage {
-            filter_buff: CircularConvBuffer32::new(),
+            filter_buff: SizedCircularConvBuff32::new(),
             delay_buff: match role {
-                SampleRole::UpSample => CircularDelayBuffer::new(UP_DELAY),
-                SampleRole::DownSample => CircularDelayBuffer::new(DOWN_DELAY),
+                SampleRole::UpSampleStage => SizedDelayBuffer32::new(UP_DELAY),
+                SampleRole::DownSampleStage => SizedDelayBuffer32::new(DOWN_DELAY),
             },
-            kernel: [0.0f32; 32],
+            kernel: [0.0f32; CAP],
             data: vec![0.0_f32; target_size],
             scratch_buff: match role {
-                SampleRole::UpSample => vec![0.0_f32; target_size / 2],
-                SampleRole::DownSample => vec![0.0_f32; target_size],
+                SampleRole::UpSampleStage => vec![0.0_f32; target_size / 2],
+                SampleRole::DownSampleStage => vec![0.0_f32; target_size],
             },
             delay_coef: None,
         }
     }
 
     #[cold]
-    pub fn initialize_kernel(&mut self) {
-        let new_kernel = build_filter_coefs();
+    pub fn initialize_kernel(&mut self, num_coefs: usize) {
+        let new_kernel = build_filter_coefs(num_coefs);
         self.kernel
             .iter_mut()
             .zip(new_kernel.iter().step_by(2))
@@ -95,11 +98,11 @@ mod tests {
     #[test]
     fn test_create_os_stage() {
         let _buf: &mut [f32] = &mut [0.0; 8];
-        let os_stage = OversampleStage::new(8, SampleRole::UpSample);
+        let os_stage = OversampleStage::new(8, SampleRole::UpSampleStage);
         assert_eq!(os_stage.data, &[0.0_f32; 8]);
 
         let _buf_64: &mut [f32] = &mut [0.0; 8];
-        let os_stage_64 = OversampleStage::new(8, SampleRole::UpSample);
+        let os_stage_64 = OversampleStage::new(8, SampleRole::UpSampleStage);
 
         assert_eq!(os_stage_64.data, &[0.0_f32; 8]);
     }
@@ -107,7 +110,7 @@ mod tests {
     #[test]
     fn test_os_stage_up() {
         let _buf: &mut [f32] = &mut [0.0; 8];
-        let mut os_stage = OversampleStage::new(8, SampleRole::UpSample);
+        let mut os_stage = OversampleStage::new(8, SampleRole::UpSampleStage);
         os_stage.initialize_kernel();
 
         let signal: &mut [f32] = &mut [1., 0., 0., 0.];
@@ -130,7 +133,7 @@ mod tests {
     #[test]
     fn test_os_stage_down() {
         let _buf: &mut [f32] = &mut [0.0; 8];
-        let mut os_stage = OversampleStage::new(8, SampleRole::DownSample);
+        let mut os_stage = OversampleStage::new(8, SampleRole::DownSampleStage);
 
         os_stage.initialize_kernel();
 
@@ -176,8 +179,8 @@ mod tests {
         let _buf_0: &mut [f32] = &mut [0.0; 8];
         let _buf_1: &mut [f32] = &mut [0.0; 16];
 
-        let mut os_stage_0 = OversampleStage::new(8, SampleRole::UpSample);
-        let mut os_stage_1 = OversampleStage::new(16, SampleRole::UpSample);
+        let mut os_stage_0 = OversampleStage::new(8, SampleRole::UpSampleStage);
+        let mut os_stage_1 = OversampleStage::new(16, SampleRole::UpSampleStage);
 
         os_stage_0.initialize_kernel();
         os_stage_1.initialize_kernel();
@@ -211,8 +214,8 @@ mod tests {
 
     #[test]
     fn test_os_multi_stage_down() {
-        let mut os_stage_0 = OversampleStage::new(16, SampleRole::DownSample);
-        let mut os_stage_1 = OversampleStage::new(8, SampleRole::DownSample);
+        let mut os_stage_0 = OversampleStage::new(16, SampleRole::DownSampleStage);
+        let mut os_stage_1 = OversampleStage::new(8, SampleRole::DownSampleStage);
 
         os_stage_0.initialize_kernel();
         os_stage_1.initialize_kernel();
@@ -305,7 +308,8 @@ mod tests {
 
     #[test]
     fn test_big_rand_os_stage_up() {
-        let mut os_stage_0 = OversampleStage::new(RAND_TEST_DATA.len() * 2, SampleRole::UpSample);
+        let mut os_stage_0 =
+            OversampleStage::new(RAND_TEST_DATA.len() * 2, SampleRole::UpSampleStage);
         os_stage_0.initialize_kernel();
 
         let mut sig = RAND_TEST_DATA.clone();
@@ -450,7 +454,7 @@ mod tests {
 
     #[test]
     fn test_big_rand_os_stage_down() {
-        let mut os_stage_0 = OversampleStage::new(32, SampleRole::DownSample);
+        let mut os_stage_0 = OversampleStage::new(32, SampleRole::DownSampleStage);
         os_stage_0.initialize_kernel();
 
         let mut sig = RAND_TEST_DATA.clone();

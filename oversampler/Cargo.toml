@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+window = { path = "../window"}
 circular_buffer = { path = "../circular_buffer/" }
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 scilib = "1.0.0"
