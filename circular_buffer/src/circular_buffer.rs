@@ -18,41 +18,46 @@ fn dot_prod(buf: &[f32], kernel: &[f32]) -> f32 {
         .fold(0.0, |acc, (b, k)| acc + (b * k))
 }
 
-const KERNEL_SIZE: usize = 32;
-const KERNEL_SIZE_I32: i32 = 32;
-const NUM_CONV_BLOCKS: usize = 1;
-const BLOCK_SIZE: usize = KERNEL_SIZE * NUM_CONV_BLOCKS;
-const BUF_SIZE: usize = BLOCK_SIZE + KERNEL_SIZE;
-
 #[derive(Debug)]
-pub struct SizedCircularConvBuff32 {
-    buff: [f32; BUF_SIZE],
+pub struct SizedCircularConvBuff<const K_SIZE: usize, const B_SIZE: usize> {
+    buff: [f32; B_SIZE],
 }
 
-impl SizedCircularConvBuff32 {
+impl<const K_SIZE: usize, const B_SIZE: usize> SizedCircularConvBuff<K_SIZE, B_SIZE> {
+    // const KERNEL_SIZE: usize = SIZE;
+    const KERNEL_SIZE_I32: i32 = K_SIZE as i32;
+    const NUM_CONV_BLOCKS: usize = 1;
+    const BLOCK_SIZE: usize = K_SIZE * Self::NUM_CONV_BLOCKS;
+    // const BUF_SIZE: usize = Self::BLOCK_SIZE + Self::KERNEL_SIZE;
+
     pub fn new() -> Self {
-        SizedCircularConvBuff32 {
-            buff: [0.0_f32; BUF_SIZE],
+        SizedCircularConvBuff {
+            buff: [0.0_f32; B_SIZE],
         }
     }
 
-    pub fn convolve(&mut self, input: &mut [f32], kernel: &[f32; KERNEL_SIZE]) {
+    pub fn convolve(&mut self, input: &mut [f32], kernel: &[f32; K_SIZE]) {
         // for i in 0..input.len() / kernel.len()
         // copy input[i * k..(i + 1) * k] -> buff[k..k * 2]
         // for j in 0..k
         // input[i+j] = buf[i + 1 .. i + 1 + k] dot kernel
         // buf[k..k * 2] -> buf[0..k]
 
-        for i in 0..(input.len() / BLOCK_SIZE) {
-            self.buff[KERNEL_SIZE..]
+        for i in 0..(input.len() / Self::BLOCK_SIZE) {
+            self.buff[K_SIZE..]
                 .iter_mut()
-                .zip(input.iter().skip(i * BLOCK_SIZE).take(BLOCK_SIZE))
+                .zip(
+                    input
+                        .iter()
+                        .skip(i * Self::BLOCK_SIZE)
+                        .take(Self::BLOCK_SIZE),
+                )
                 .for_each(|(b, i)| *b = *i);
 
-            for j in 0..BLOCK_SIZE {
+            for j in 0..Self::BLOCK_SIZE {
                 unsafe {
-                    input[(i * BLOCK_SIZE) + j] = cblas_sdot(
-                        KERNEL_SIZE_I32,
+                    input[(i * Self::BLOCK_SIZE) + j] = cblas_sdot(
+                        Self::KERNEL_SIZE_I32,
                         self.buff[j + 1..].as_ptr(),
                         1,
                         kernel.as_ptr(),
@@ -60,8 +65,8 @@ impl SizedCircularConvBuff32 {
                     );
                 }
             }
-            for j in 0..KERNEL_SIZE {
-                self.buff[j] = self.buff[j + BLOCK_SIZE];
+            for j in 0..K_SIZE {
+                self.buff[j] = self.buff[j + Self::BLOCK_SIZE];
             }
         }
     }
@@ -74,27 +79,25 @@ pub trait DelayBuffer {
     fn reset(&mut self);
 }
 
-const SIZED_DELAY_32_SIZE: usize = 32;
+// const SIZED_DELAY_32_SIZE: usize = 32;
 
 #[derive(Debug)]
-pub struct SizedDelayBuffer32 {
-    data: [f32; 32],
+pub struct SizedDelayBuffer<const DELAY_LEN: usize> {
+    data: [f32; DELAY_LEN],
     pos: usize,
-    size: usize,
 }
 
-impl SizedDelayBuffer32 {
+impl<const DELAY_LEN: usize> SizedDelayBuffer<DELAY_LEN> {
     pub fn new(delay_len: usize) -> Self {
-        assert!(delay_len <= 32 && delay_len > 0);
-        SizedDelayBuffer32 {
-            data: [0.0_f32; SIZED_DELAY_32_SIZE],
-            size: delay_len,
+        assert!(delay_len <= DELAY_LEN && delay_len > 0);
+        SizedDelayBuffer {
+            data: [0.0_f32; DELAY_LEN],
             pos: 0,
         }
     }
 }
 
-impl DelayBuffer for SizedDelayBuffer32 {
+impl<const DELAY_LEN: usize> DelayBuffer for SizedDelayBuffer<DELAY_LEN> {
     #[inline]
     fn push(&mut self, val: f32) {
         self.data[self.pos] = val;
@@ -103,7 +106,7 @@ impl DelayBuffer for SizedDelayBuffer32 {
     #[inline]
     fn decrement_pos(&mut self) {
         self.pos = if self.pos == 0 {
-            self.size - 1
+            DELAY_LEN - 1
         } else {
             self.pos - 1
         };
@@ -342,7 +345,7 @@ mod tests {
     #[test]
     fn delay_5_samples_sized() {
         let mut sig: Vec<f32> = (1..10).map(|x| x as f32).collect();
-        let mut delay_buf = SizedDelayBuffer32::new(5);
+        let mut delay_buf: SizedDelayBuffer<5> = SizedDelayBuffer::new(5);
 
         delay_buf.delay(&mut sig);
         let expected_result = vec![0., 0., 0., 0., 1., 2., 3., 4., 5.];
@@ -694,7 +697,7 @@ mod tests {
             7.68219493e-02,
         ];
 
-        let mut buf = SizedCircularConvBuff32::new();
+        let mut buf: SizedCircularConvBuff<32, 64> = SizedCircularConvBuff::new();
 
         buf.convolve(sig, &kernel_reversed);
         assert_eq!(sig.len(), expected_result.len());

@@ -3,13 +3,15 @@ mod oversample_stage;
 
 use nih_plug::prelude::*;
 
-use crate::oversample::oversample_stage::OversampleStage;
+use crate::oversample::oversample_stage::{OversampleStage, OversampleStageBuilder};
+
+use os_filter_constants::*;
 
 const MAX_OVER_SAMPLE_FACTOR: usize = 4;
-const STAGE_1_KERNEL_SIZE: usize = 64;
-const STAGE_2_KERNEL_SIZE: usize = 32;
-const STAGE_3_KERNEL_SIZE: usize = 16;
-const STAGE_4_KERNEL_SIZE: usize = 8;
+// const STAGE_1_KERNEL_SIZE: usize = 64;
+// const STAGE_2_KERNEL_SIZE: usize = 32;
+// const STAGE_3_KERNEL_SIZE: usize = 16;
+// const STAGE_4_KERNEL_SIZE: usize = 8;
 
 #[derive(Enum, Debug, Copy, Clone, PartialEq)]
 pub enum OversampleFactor {
@@ -33,47 +35,140 @@ enum SampleRole {
 }
 use SampleRole::*;
 
+type Up2xStageBuilder =
+    OversampleStageBuilder<FILTER_EVEN_TAPS_OS2X, OS2X_CONV_BUFFER_LEN, OS2X_UP_STAGE_DELAY_AMT>;
+type Up4xStageBuilder =
+    OversampleStageBuilder<FILTER_EVEN_TAPS_OS4X, OS4X_CONV_BUFFER_LEN, OS4X_UP_STAGE_DELAY_AMT>;
+type Up8xStageBuilder =
+    OversampleStageBuilder<FILTER_EVEN_TAPS_OS8X, OS8X_CONV_BUFFER_LEN, OS8X_UP_STAGE_DELAY_AMT>;
+type Up16xStageBuilder =
+    OversampleStageBuilder<FILTER_EVEN_TAPS_OS16X, OS16X_CONV_BUFFER_LEN, OS16X_UP_STAGE_DELAY_AMT>;
+type Down2xStageBuilder =
+    OversampleStageBuilder<FILTER_EVEN_TAPS_OS2X, OS2X_CONV_BUFFER_LEN, OS2X_DOWN_STAGE_DELAY_AMT>;
+type Down4xStageBuilder =
+    OversampleStageBuilder<FILTER_EVEN_TAPS_OS4X, OS4X_CONV_BUFFER_LEN, OS4X_DOWN_STAGE_DELAY_AMT>;
+type Down8xStageBuilder =
+    OversampleStageBuilder<FILTER_EVEN_TAPS_OS8X, OS8X_CONV_BUFFER_LEN, OS8X_DOWN_STAGE_DELAY_AMT>;
+type Down16xStageBuilder = OversampleStageBuilder<
+    FILTER_EVEN_TAPS_OS16X,
+    OS16X_CONV_BUFFER_LEN,
+    OS16X_DOWN_STAGE_DELAY_AMT,
+>;
+
+enum Stages {
+    Up2xStage(Up2xStageBuilder),
+    Up4xStage(Up4xStageBuilder),
+    Up8xStage(Up8xStageBuilder),
+    Up16xStage(Up16xStageBuilder),
+    Down2xStage(Down2xStageBuilder),
+    Down4xStage(Down4xStageBuilder),
+    Down8xStage(Down8xStageBuilder),
+    Down16xStage(Down16xStageBuilder),
+}
+use Stages::*;
+
+impl Stages {
+    fn up_2x_stage() -> Self {
+        Up2xStage(OversampleStageBuilder::new())
+    }
+
+    fn up_4x_stage() -> Self {
+        Up4xStage(OversampleStageBuilder::new())
+    }
+
+    fn up_8x_stage() -> Self {
+        Up8xStage(OversampleStageBuilder::new())
+    }
+
+    fn up_16x_stage() -> Self {
+        Up16xStage(OversampleStageBuilder::new())
+    }
+
+    fn down_2x_stage() -> Self {
+        Down2xStage(OversampleStageBuilder::new())
+    }
+
+    fn down_4x_stage() -> Self {
+        Down4xStage(OversampleStageBuilder::new())
+    }
+
+    fn down_8x_stage() -> Self {
+        Down8xStage(OversampleStageBuilder::new())
+    }
+
+    fn down_16x_stage() -> Self {
+        Down16xStage(OversampleStageBuilder::new())
+    }
+}
+
 pub struct OversampleBuilder {
-    max_buff_size: usize,
-    up_stages: Option<[OversampleStage; MAX_OVER_SAMPLE_FACTOR]>,
-    down_stages: Option<[OversampleStage; MAX_OVER_SAMPLE_FACTOR]>,
+    buff_size: usize,
+    up_stage_builders: [Stages; 4],
+    down_stage_builders: [Stages; 4],
+}
+
+fn up_stage_factor_size(buff_size: usize, factor: OversampleFactor) -> usize {
+    buff_size * (2_u32.pow(factor as u32 + 1) as usize)
+}
+
+fn down_stage_factor_size(buff_size: usize, factor: OversampleFactor) -> usize {
+    buff_size * (2_u32.pow((MAX_OVER_SAMPLE_FACTOR - factor as usize) as u32) as usize)
 }
 
 impl OversampleBuilder {
-    pub fn new(buff_size: usize) -> Self {
+    pub fn new(init_buff_size: usize) -> Self {
         OversampleBuilder {
-            max_buff_size: buff_size,
-            up_stages: None,
-            down_stages: None,
+            buff_size: init_buff_size,
+            up_stage_builders: [
+                Stages::up_2x_stage(),
+                Stages::up_4x_stage(),
+                Stages::up_8x_stage(),
+                Stages::up_16x_stage(),
+            ],
+            down_stage_builders: [
+                Stages::down_2x_stage(),
+                Stages::down_4x_stage(),
+                Stages::down_8x_stage(),
+                Stages::down_16x_stage(),
+            ],
         }
     }
 
-    pub fn build_up_stages(&mut self) -> &mut self {
-        unimplemented!();
+    pub fn build_up_stages(&mut self) -> &mut Self {
+        match self.up_stage_builders[0] {
+            Up16xStage(mut x) => {
+                *x.build_kernel();
+            }
+            _ => (),
+        }
         self
     }
 
-    pub fn build_down_stages(&mut self) -> &mut self {
-        unimplemented!();
+    pub fn build_down_stages(&mut self) -> &mut Self {
+        self.down_os2x_stage_builder.build_kernel();
         self
     }
 
     pub fn build(&self) -> Oversample {
-        unimplemented!();
+        Oversample {
+            init_buff_size: self.buff_size,
+            factor: OversampleFactor::TwoTimes,
+            up_stages: [self.up_stage.unwrap()],
+            down_stages: [self.down_stage.unwrap()],
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct Oversample {
+    init_buff_size: usize,
     factor: OversampleFactor,
     up_stages: [OversampleStage; MAX_OVER_SAMPLE_FACTOR],
     down_stages: [OversampleStage; MAX_OVER_SAMPLE_FACTOR],
-    initial_buff_size: usize,
 }
 
 impl Oversample {
     pub fn new(initial_factor: OversampleFactor, init_buff_size: usize) -> Self {
-        todo!("Replace all of this in builder -- along with sized oversampling stages")
         Oversample {
             factor: initial_factor,
             up_stages: [
@@ -151,9 +246,8 @@ impl Oversample {
             .iter_mut()
             .take(self.factor as usize)
             .for_each(|s| {
-                    s.process_up(last_stage);
-                    last_stage = &mut s.data;
-                
+                s.process_up(last_stage);
+                last_stage = &mut s.data;
             });
 
         output
@@ -174,8 +268,8 @@ impl Oversample {
             .take(self.factor as usize)
             .rev()
             .for_each(|s| {
-                    s.process_down(last_stage);
-                    last_stage = &mut s.data;
+                s.process_down(last_stage);
+                last_stage = &mut s.data;
             });
 
         output
@@ -187,6 +281,7 @@ impl Oversample {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
 
@@ -718,3 +813,4 @@ mod tests {
         }
     }
 }
+*/

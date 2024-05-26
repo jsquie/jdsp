@@ -5,6 +5,31 @@ pub const NUM_OS_FILTER_TAPS: usize = 32;
 pub const UP_DELAY: usize = NUM_OS_FILTER_TAPS / 2;
 pub const DOWN_DELAY: usize = (NUM_OS_FILTER_TAPS / 2) + 1;
 
+pub const FILTER_TOTAL_TAPS_OS2X: usize = 95;
+pub const FILTER_TOTAL_TAPS_OS4X: usize = 63;
+pub const FILTER_TOTAL_TAPS_OS8X: usize = 39;
+pub const FILTER_TOTAL_TAPS_OS16X: usize = 31;
+
+pub const FILTER_EVEN_TAPS_OS2X: usize = 48;
+pub const FILTER_EVEN_TAPS_OS4X: usize = 32;
+pub const FILTER_EVEN_TAPS_OS8X: usize = 20;
+pub const FILTER_EVEN_TAPS_OS16X: usize = 16;
+
+pub const OS2X_CONV_BUFFER_LEN: usize = FILTER_EVEN_TAPS_OS2X * 2;
+pub const OS4X_CONV_BUFFER_LEN: usize = FILTER_EVEN_TAPS_OS4X * 2;
+pub const OS8X_CONV_BUFFER_LEN: usize = FILTER_EVEN_TAPS_OS8X * 2;
+pub const OS16X_CONV_BUFFER_LEN: usize = FILTER_EVEN_TAPS_OS16X * 2;
+
+pub const OS2X_UP_STAGE_DELAY_AMT: usize = FILTER_EVEN_TAPS_OS2X / 2;
+pub const OS4X_UP_STAGE_DELAY_AMT: usize = FILTER_EVEN_TAPS_OS4X / 2;
+pub const OS8X_UP_STAGE_DELAY_AMT: usize = FILTER_EVEN_TAPS_OS8X / 2;
+pub const OS16X_UP_STAGE_DELAY_AMT: usize = FILTER_EVEN_TAPS_OS16X / 2;
+
+pub const OS2X_DOWN_STAGE_DELAY_AMT: usize = (FILTER_EVEN_TAPS_OS2X / 2) + 1;
+pub const OS4X_DOWN_STAGE_DELAY_AMT: usize = (FILTER_EVEN_TAPS_OS4X / 2) + 1;
+pub const OS8X_DOWN_STAGE_DELAY_AMT: usize = (FILTER_EVEN_TAPS_OS8X / 2) + 1;
+pub const OS16X_DOWN_STAGE_DELAY_AMT: usize = (FILTER_EVEN_TAPS_OS16X / 2) + 1;
+
 pub fn build_filter_coefs(num_taps: usize) -> Vec<f32> {
     let sinc = sinc(num_taps, 0.5);
     let hann = hann(num_taps);
