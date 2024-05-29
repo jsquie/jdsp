@@ -1,131 +1,113 @@
 use crate::oversample::os_filter_constants::*;
-use circular_buffer::circular_buffer::{DelayBuffer, SizedCircularConvBuff, SizedDelayBuffer};
+use circular_buffer::circular_buffer::{SizedCircularConvBuff, SizedDelayBuffer};
 
-pub struct OversampleStageBuilder<const K: usize, const B: usize, const D: usize> {
-    buff_size: Option<usize>,
-    kernel: Option<[f32; K]>,
-    delay_coef: Option<f32>,
-}
-
-impl<const K: usize, const B: usize, const D: usize> OversampleStageBuilder<K, B, D> {
-    pub fn new() -> Self {
-        OversampleStageBuilder {
-            buff_size: None,
-            kernel: None,
-            delay_coef: None,
-        }
-    }
-
-    fn generate_filter_coefs() -> Result<([f32; K], f32), &'static str> {
-        let coefs = build_filter_coefs(K * 2);
-        let mut result = [0.0_f32; K];
-        result
-            .iter_mut()
-            .zip(coefs.iter().step_by(2))
-            .for_each(|(v, c)| *v = *c);
-        Ok((result, coefs[coefs.len() / 2]))
-    }
-
-    pub fn build_kernel(&mut self) -> &mut Self {
-        let (new_kernel, delay_coef) = Self::generate_filter_coefs().expect("Error building coefs");
-        self.kernel = Some(new_kernel);
-        self.delay_coef = Some(delay_coef);
-        self
-    }
-
-    pub fn build(&self) -> OversampleStage<K, B, D> {
-        OversampleStage {
-            filter_buff: SizedCircularConvBuff::new(),
-            delay_buff: SizedDelayBuffer::new(D),
-            kernel: self.kernel.unwrap(),
-            data: vec![0.0_f32; self.buff_size.unwrap()],
-            scratch_buff: vec![0.0_f32; self.buff_size],
-            delay_coef: self.delay_coef.unwrap(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct OversampleStage<const K_SIZE: usize, const B_SIZE: usize, const D_LEN: usize> {
-    filter_buff: SizedCircularConvBuff<K_SIZE, B_SIZE>,
-    delay_buff: SizedDelayBuffer<D_LEN>,
-    kernel: [f32; K_SIZE],
-    pub data: Vec<f32>,
-    scratch_buff: Vec<f32>,
+struct TwoTimes {
+    kernel: [f32; FILTER_EVEN_TAPS_OS2X],
+    filter_buff: SizedCircularConvBuff<FILTER_EVEN_TAPS_OS2X, OS2X_CONV_BUFFER_LEN>,
+    up_delay_buf: SizedDelayBuffer<OS2X_UP_STAGE_DELAY_AMT>,
+    down_delay_buf: SizedDelayBuffer<OS2X_DOWN_STAGE_DELAY_AMT>,
     delay_coef: f32,
 }
 
-impl<const K_SIZE: usize, const B_SIZE: usize, const D_LEN: usize>
-    OversampleStage<K_SIZE, B_SIZE, D_LEN>
-{
-    #[cold]
-    pub fn reset(&mut self) {
-        // self.filter_buff.reset();
-        self.delay_buff.reset();
-        self.data.iter_mut().for_each(|x| *x = 0.0);
-        self.scratch_buff.iter_mut().for_each(|x| *x = 0.0);
+impl TwoTimes {
+    pub fn new() -> Self {
+        Self {
+            kernel: [0.0_f32; FILTER_EVEN_TAPS_OS2X],
+            filter_buff: SizedCircularConvBuff::new(1),
+            up_delay_buf: SizedDelayBuffer::new(OS2X_UP_STAGE_DELAY_AMT),
+            down_delay_buf: SizedDelayBuffer::new(OS2X_DOWN_STAGE_DELAY_AMT),
+            delay_coef: 0.0,
+        }
     }
+}
+// struct FourTimes {
+// kernel: [f32; FILTER_EVEN_TAPS_OS4X],
+// }
+// struct EightTimes {
+// kernel: [f32; FILTER_EVEN_TAPS_OS8X],
+// }
+// struct SixteenTimes {
+// kernel: [f32; FILTER_EVEN_TAPS_OS16X],
+// }
 
-    #[inline]
-    pub fn process_up(&mut self, input: &mut [f32]) {
-        self.scratch_buff
-            .iter_mut()
-            .zip(input.iter())
-            .for_each(|(v, i)| *v = *i);
+#[derive(Debug)]
+pub struct OversampleStage<F: OsFactor> {
+    pub data: Vec<f32>,
+    scratch_buff: Vec<f32>,
+    factor: F,
+}
 
+pub trait OsFactor: Sized {
+    fn process_up(&mut self, input: &mut [f32], st: &mut OversampleStage<Self>);
+    fn process_down(&mut self, input: &mut [f32], st: &mut OversampleStage<Self>);
+}
+
+impl OsFactor for TwoTimes {
+    fn process_up(&mut self, input: &mut [f32], st: &mut OversampleStage<Self>) {
+        input[..].clone_into(&mut st.scratch_buff);
+        self.up_delay_buf.delay(&mut st.scratch_buff);
         self.filter_buff.convolve(input, &self.kernel);
-        self.delay_buff.delay(&mut self.scratch_buff);
-
-        let mut output = self.data.iter_mut();
-
-        input
-            .iter()
-            .zip(self.scratch_buff.iter())
-            .for_each(|(c, d)| {
-                *output.next().unwrap() = *c * 2.0;
-                *output.next().unwrap() = *d * 2.0 * self.delay_coef;
+        st.data
+            .iter_mut()
+            .step_by(2)
+            .zip(input.iter())
+            .for_each(|(d, f)| *d = *f * 2.0);
+        st.data
+            .iter_mut()
+            .skip(1)
+            .step_by(2)
+            .zip(st.scratch_buff.iter())
+            .for_each(|(o, i)| {
+                *o = *i * 2.0 * self.delay_coef;
             });
     }
 
-    #[inline]
-    pub fn process_down(&mut self, input: &[f32]) {
-        self.data
+    fn process_down(&mut self, input: &mut [f32], st: &mut OversampleStage<Self>) {
+        st.data
             .iter_mut()
             .zip(input.iter().step_by(2))
-            .for_each(|(a, b)| *a = *b);
+            .for_each(|(d, i)| *d = *i);
 
-        self.filter_buff.convolve(&mut self.data, &self.kernel);
-
-        self.scratch_buff
+        st.scratch_buff
             .iter_mut()
             .zip(input.iter().skip(1).step_by(2))
-            .for_each(|(a, b)| *a = *b * self.delay_coef);
+            .for_each(|(o, i)| *o = *i);
 
-        self.delay_buff.delay(&mut self.scratch_buff);
+        self.filter_buff.convolve(&mut st.data, &self.kernel);
+        self.down_delay_buf.delay(&mut st.scratch_buff);
 
-        self.data
+        st.data
             .iter_mut()
-            .zip(self.scratch_buff.iter())
-            .for_each(|(o, d)| *o = *o + *d);
+            .zip(st.scratch_buff.iter())
+            .for_each(|(c, d)| *c = *c + (*d * self.delay_coef));
+    }
+}
+
+impl OversampleStage<TwoTimes> {
+    pub fn new(input_len: usize) -> Self {
+        OversampleStage {
+            data: vec![0.0_f32; input_len],
+            scratch_buff: vec![0.0_f32; input_len],
+            factor: TwoTimes::new(),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::oversample::FILTER_EVEN_TAPS_OS2X;
 
-    /*
+    use super::{OversampleStage, TwoTimes};
+
     #[test]
     fn test_create_os_stage() {
-        let _buf: &mut [f32] = &mut [0.0; 8];
-        let os_stage = OversampleStage::new(8, SampleRole::UpSampleStage);
-        assert_eq!(os_stage.data, &[0.0_f32; 8]);
-
-        let _buf_64: &mut [f32] = &mut [0.0; 8];
-        let os_stage_64 = OversampleStage::new(8, SampleRole::UpSampleStage);
-
-        assert_eq!(os_stage_64.data, &[0.0_f32; 8]);
+        let os_stage: OversampleStage<TwoTimes> = OversampleStage::new(8);
+        assert_eq!(os_stage.scratch_buff.len(), 8);
+        assert_eq!(os_stage.data.len(), 8);
+        assert_eq!(os_stage.factor.kernel, [0.0_f32; FILTER_EVEN_TAPS_OS2X]);
     }
 
+    /*
     #[test]
     fn test_os_stage_up() {
         let _buf: &mut [f32] = &mut [0.0; 8];
