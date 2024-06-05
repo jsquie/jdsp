@@ -42,7 +42,6 @@ pub enum ProcStateTransition {
     ChangeOrder(AntiderivativeOrder),
     ChangeStyle(ProcessorStyle),
 }
-use ProcStateTransition::*;
 
 type H = fn(f64) -> f64;
 type H1 = fn(f64) -> f64;
