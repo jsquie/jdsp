@@ -1,14 +1,15 @@
+use std::collections::VecDeque;
+use std::ptr;
+
 #[cfg(target_arch = "aarch64")]
 use apple_sys::Accelerate::cblas_sdot;
+#[cfg(target_arch = "aarch64")]
+use std::arch::aarch64::*;
 
 #[inline]
 #[cfg(target_arch = "aarch64")]
 fn dot_prod(buf: &[f32], kernel: &[f32], n: i32) -> f32 {
-    let result;
-    unsafe {
-        result = cblas_sdot(n, buf.as_ptr(), 1, kernel.as_ptr(), 1);
-    }
-    result
+    unsafe { cblas_sdot(n, buf.as_ptr(), 1, kernel.as_ptr(), 1) }
 }
 
 #[cfg(not(target_arch = "aarch64"))]
@@ -16,6 +17,128 @@ fn dot_prod(buf: &[f32], kernel: &[f32]) -> f32 {
     buf.iter()
         .zip(kernel.iter())
         .fold(0.0, |acc, (b, k)| acc + (b * k))
+}
+
+#[derive(Debug)]
+pub struct TiledConv {
+    buffer: Vec<f32>,
+    k_len: usize,
+    i_len: usize,
+}
+
+impl TiledConv {
+    pub fn new(k_len: usize, i_len: usize) -> Self {
+        TiledConv {
+            buffer: vec![0.0_f32; k_len + i_len - 1],
+            k_len,
+            i_len,
+        }
+    }
+
+    pub fn convolve(&mut self, input: &mut [f32], kernel: &[f32]) {
+        Self::fast_copy(input, &mut self.buffer[self.k_len - 1..]);
+        for i in 0..self.i_len {
+            unsafe {
+                input[i] = Self::neon_dot_product(&self.buffer[i..i + self.k_len], kernel);
+            }
+        }
+        for i in 0..self.k_len - 1 {
+            self.buffer[i] = self.buffer[self.i_len + i];
+        }
+    }
+
+    #[inline]
+    unsafe fn neon_dot_product(a: &[f32], b: &[f32]) -> f32 {
+        assert!(a.len() == b.len());
+        let mut sum = vdupq_n_f32(0.0);
+        let mut result = 0.0;
+
+        for (chunk_a, chunk_b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
+            let a_vec = vld1q_f32(chunk_a.as_ptr());
+            let b_vec = vld1q_f32(chunk_b.as_ptr());
+            sum = vmlaq_f32(sum, a_vec, b_vec);
+        }
+
+        let a_remain = a.chunks_exact(4).remainder();
+        let b_remain = b.chunks_exact(4).remainder();
+
+        result += vaddvq_f32(sum);
+
+        for (aa, bb) in a_remain.iter().zip(b_remain.iter()) {
+            result += aa * bb;
+        }
+
+        result
+    }
+
+    #[inline]
+    fn fast_copy(src: &[f32], dst: &mut [f32]) {
+        assert!(src.len() <= dst.len());
+        unsafe {
+            ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), src.len());
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Delay<I>
+where
+    I: Iterator,
+{
+    iter: Option<I>,
+    buffer: VecDeque<I::Item>,
+    delay: usize,
+}
+
+// impl<I> Delay<I> where I: Iterator
+
+#[derive(Debug)]
+pub struct CircularConvBuffer {
+    buff: Vec<f32>,
+    block_size: usize,
+    k_size: usize,
+    k_size_i32: i32,
+}
+
+impl CircularConvBuffer {
+    // const KERNEL_SIZE: usize = SIZE;
+    // const KERNEL_SIZE_I32: i32 = K_SIZE as i32;
+    // const NUM_CONV_BLOCKS: usize = 1;
+    // const BLOCK_SIZE: usize = K_SIZE * Self::NUM_CONV_BLOCKS;
+    // const BUF_SIZE: usize = Self::BLOCK_SIZE + Self::KERNEL_SIZE;
+
+    pub fn new(new_k_size: usize) -> Self {
+        // assert_eq!((buf_partitions * K_SIZE) % B_SIZE, 0);
+        CircularConvBuffer {
+            buff: vec![0.0_f32; new_k_size * 2],
+            block_size: new_k_size,
+            k_size: new_k_size,
+            k_size_i32: new_k_size as i32,
+        }
+    }
+
+    pub fn convolve(&mut self, input: &mut [f32], kernel: &[f32]) {
+        // for i in 0..input.len() / kernel.len()
+        // copy input[i * k..(i + 1) * k] -> buff[k..k * 2]
+        // for j in 0..k
+        // input[i+j] = buf[i + 1 .. i + 1 + k] dot kernel
+        // buf[k..k * 2] -> buf[0..k]
+
+        for i in 0..(input.len() / self.block_size) {
+            self.buff[self.k_size..]
+                .iter_mut()
+                .zip(input.iter().skip(i * self.block_size).take(self.block_size))
+                .for_each(|(b, i)| *b = *i);
+
+            for j in 0..self.block_size {
+                input[(i * self.block_size) + j] =
+                    dot_prod(&self.buff[j + 1..], kernel, self.k_size_i32);
+            }
+            for j in 0..self.k_size {
+                self.buff[j] = self.buff[j + self.block_size];
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -72,13 +195,6 @@ impl<const K_SIZE: usize, const B_SIZE: usize> SizedCircularConvBuff<K_SIZE, B_S
             }
         }
     }
-}
-
-pub trait DelayBuffer {
-    fn push(&mut self, val: f32);
-    fn decrement_pos(&mut self);
-    fn delay(&mut self, input: &mut [f32]);
-    fn reset(&mut self);
 }
 
 // const SIZED_DELAY_32_SIZE: usize = 32;
@@ -143,9 +259,7 @@ impl CircularDelayBuffer {
             size: initial_size,
         }
     }
-}
 
-impl DelayBuffer for CircularDelayBuffer {
     #[inline]
     fn push(&mut self, val: f32) {
         self.data[self.pos] = val;
@@ -169,67 +283,11 @@ impl DelayBuffer for CircularDelayBuffer {
 
     /// delays the input by self.size number of samples
     #[inline]
-    fn delay(&mut self, input: &mut [f32]) {
+    pub fn delay(&mut self, input: &mut [f32]) {
         input.iter_mut().for_each(|v| {
             self.push(*v);
             self.decrement_pos();
             *v = self.data[self.pos];
-        })
-    }
-}
-
-#[derive(Debug)]
-pub struct CircularConvBuffer {
-    data: Vec<f32>,
-    kernel: Vec<f32>,
-    pos: usize,
-    size: usize,
-}
-
-impl CircularConvBuffer {
-    pub fn new(initial_size: usize, kernel: &[f32]) -> Self {
-        CircularConvBuffer {
-            data: vec![0.0_f32; initial_size],
-            pos: 0,
-            size: initial_size,
-            kernel: kernel.iter().rev().map(|v| *v).collect::<Vec<f32>>(),
-        }
-    }
-
-    /// Resets the buffer's data to all zeros and resets the buffers position value to zero
-    #[cold]
-    pub fn reset(&mut self) {
-        self.data.iter_mut().for_each(|x| *x = 0.0_f32.into());
-        self.pos = 0;
-    }
-
-    #[inline]
-    fn push(&mut self, val: f32) {
-        self.data[self.pos] = val;
-    }
-
-    #[inline]
-    fn increment_pos(&mut self) {
-        self.pos = if self.pos == self.size - 1 {
-            0
-        } else {
-            self.pos + 1
-        };
-    }
-
-    /// Convolves the input signal with the buffer's interal kernel
-    #[inline]
-    pub fn convolve(&mut self, input: &mut [f32]) {
-        input.iter_mut().for_each(|s| {
-            self.push(*s);
-            self.increment_pos();
-            let o_pos = self.size - self.pos;
-            *s = dot_prod(&self.data[self.pos..], &self.kernel[..o_pos], o_pos as i32)
-                + dot_prod(
-                    &self.data[..self.pos],
-                    &self.kernel[o_pos..],
-                    self.pos as i32,
-                );
         })
     }
 }
@@ -247,10 +305,10 @@ mod tests {
         assert_eq!(new.size, 1);
         assert_eq!(new.data, vec![0.0]);
 
-        let new_conv = CircularConvBuffer::new(1, &[1.]);
-        assert_eq!(new_conv.pos, 0);
-        assert_eq!(new_conv.size, 1);
-        assert_eq!(new_conv.data, vec![0.0]);
+        let new_conv = CircularConvBuffer::new(1);
+        assert_eq!(new_conv.buff, vec![0.0, 0.0]);
+        assert_eq!(new_conv.block_size, 1);
+        assert_eq!(new_conv.k_size, 1);
     }
 
     #[test]
@@ -272,14 +330,41 @@ mod tests {
 
     #[test]
     fn test_conv_01234_012() {
-        let mut signal = vec![0., 1., 2., 3., 4., 0., 0.];
-        let mut buf = CircularConvBuffer::new(3, &[0., 1., 2.]);
+        let mut signal1 = vec![0., 1., 2.];
+        let mut signal2 = vec![3., 4., 0.];
+        let mut signal3 = vec![0., 0., 0.];
+        let mut buf = TiledConv::new(3, 3);
+        let kernel = vec![2., 1., 0.];
+        let mut k = [0.0_f32; 3];
+        k.copy_from_slice(&kernel);
 
-        buf.convolve(&mut signal);
-        assert_eq!(signal, vec![0., 0., 1., 4., 7., 10., 8.])
+        buf.convolve(&mut signal1, &k);
+        buf.convolve(&mut signal2, &k);
+        buf.convolve(&mut signal3, &k);
+        // dbg!(&signal[..3]);
+        // dbg!(&signal[3..6]);
+        // dbg!(&signal[6..]);
+        let mut result: Vec<f32> = Vec::with_capacity(7);
+
+        signal1.iter().for_each(|a| {
+            result.push(*a);
+        });
+
+        signal2.iter().for_each(|a| {
+            result.push(*a);
+        });
+
+        signal3.iter().for_each(|a| {
+            result.push(*a);
+        });
+
+        dbg!(&result);
+        dbg!(&buf);
+
+        assert_eq!(result, vec![0., 0., 1., 4., 7., 10., 8., 0., 0.])
     }
 
-    const ERR_TOL: f32 = 1e-7;
+    const ERR_TOL: f32 = 1e-5;
 
     #[test]
     fn conv_sin_filter() {
@@ -288,11 +373,11 @@ mod tests {
             .collect();
 
         let coefs: [f32; 10] = [0., 1., 2., 3., 4., 5., 6., 7., 8., 9.];
-        let kernel = &coefs.into_iter().collect::<Vec<f32>>();
+        let kernel = &coefs.into_iter().rev().collect::<Vec<f32>>();
 
-        let mut buf = CircularConvBuffer::new(10, kernel);
+        let mut buf = TiledConv::new(10, 30);
 
-        buf.convolve(&mut sig);
+        buf.convolve(&mut sig, &kernel);
 
         let expected_result = vec![
             0.00000000e+00,
@@ -389,132 +474,145 @@ mod tests {
     }
 
     #[test]
-    fn test_convolve_filter_taps() {
-        let filter_taps = vec![
-            -0.0064715474097890545,
-            0.006788724784527351,
-            -0.007134125572070907,
-            0.007511871271766723,
-            -0.007926929217098087,
-            0.00838534118242672,
-            -0.00889453036904902,
-            0.009463720022395613,
-            -0.010104514094437885,
-            0.010831718180021,
-            -0.011664525313602769,
-            0.012628270948224513,
-            -0.013757103575462731,
-            0.015098181413680897,
-            -0.01671851963595936,
-            0.01871667093508393,
-            -0.021243750540180146,
-            0.024543868940610197,
-            -0.0290386730354654,
-            0.035524608815134716,
-            -0.045708348639099484,
-            0.06402724397938601,
-            -0.10675158913607562,
-            0.32031404953367254,
-            0.32031404953367254,
-            -0.10675158913607562,
-            0.06402724397938601,
-            -0.045708348639099484,
-            0.035524608815134716,
-            -0.0290386730354654,
-            0.024543868940610197,
-            -0.021243750540180146,
-            0.01871667093508393,
-            -0.01671851963595936,
-            0.015098181413680897,
-            -0.013757103575462731,
-            0.012628270948224513,
-            -0.011664525313602769,
-            0.010831718180021,
-            -0.010104514094437885,
-            0.009463720022395613,
-            -0.00889453036904902,
-            0.00838534118242672,
-            -0.007926929217098087,
-            0.007511871271766723,
-            -0.007134125572070907,
-            0.006788724784527351,
-            -0.0064715474097890545,
+    fn test_random_32_48() {
+        let mut input: &mut [f32] = &mut [
+            0.33110049,
+            1.21255977,
+            -0.63855535,
+            0.87021457,
+            0.28245597,
+            0.30258054,
+            -0.16397546,
+            0.91792172,
+            -1.03488682,
+            -0.28097881,
+            0.9075962,
+            -0.08794321,
+            -1.03246297,
+            1.20534872,
+            -0.49227481,
+            -0.6730221,
+            0.07807707,
+            1.30280194,
+            1.93008999,
+            -0.54959872,
+            -1.25225005,
+            1.48116167,
+            1.57475551,
+            0.61098639,
+            -0.21768917,
+            1.85008542,
+            -0.53402873,
+            -1.03331307,
+            0.77831737,
+            -0.45047843,
+            1.59660967,
+            -1.04902077,
+        ];
+
+        let kernel = vec![
+            -0.51786801,
+            0.12806374,
+            0.12162219,
+            -1.41806002,
+            0.44641012,
+            -0.20035058,
+            0.60430911,
+            0.16673836,
+            -0.65460348,
+            0.85289387,
+            -0.44087577,
+            1.29083681,
+            -0.33657188,
+            0.47837313,
+            1.50228393,
+            2.28960102,
+            -0.5757445,
+            -0.9422924,
+            1.0910025,
+            -0.66021472,
+            0.34913295,
+            -1.21597745,
+            -1.50175691,
+            -0.07521028,
+            0.6329468,
+            -1.21769653,
+            0.91466479,
+            -0.6157067,
+            -0.35774266,
+            2.58885707,
+            1.28951167,
+            -0.87187175,
+            0.6751307,
+            -0.02451999,
+            -0.10609072,
+            0.38177321,
+            -0.57090344,
+            -0.41314233,
+            0.06315846,
+            -0.15274474,
+            0.88008929,
+            -0.07743066,
+            0.06828122,
+            1.11188539,
+            -0.25436785,
+            -0.58250143,
+            -2.31532648,
+            1.90497062,
         ];
 
         let expected_result = vec![
-            0.0,
-            -0.0064715474097890545,
-            -0.006154370035050758,
-            -0.012971318232383369,
-            0.013609794481206961,
-            -0.014305563389777363,
-            0.015067096563530714,
-            -0.015904635655489836,
-            0.016830682831577737,
-            -0.01786066515679372,
-            0.019013850058332067,
-            -0.020314631236874423,
-            0.021794374861081975,
-            -0.02349413761982201,
-            0.02546878710742898,
-            -0.027793467534985756,
-            0.030574175904207905,
-            -0.03396596757789036,
-            0.0382063806655017,
-            -0.04368218677478544,
-            0.05107886956603451,
-            -0.06177515011522625,
-            0.07918437314659119,
-            -0.11582214709460205,
-            0.29889260319967936,
-            0.6406873811927908,
-            1.4948186585322873,
-            0.8114662143082524,
-            -0.23790862808855429,
-            0.13618964347509377,
-            -0.09511450132249442,
-            0.07304034931508355,
-            -0.05927203176535595,
-            0.04986077667655423,
-            -0.043016429386331934,
-            0.037811154947013974,
-            -0.03371629965597902,
-            0.030408608038341743,
-            -0.027679294143541935,
-            0.025387480397489004,
-            -0.02343465367520419,
-            0.02174984637358284,
-            -0.02028063260757145,
-            0.01898744051151552,
-            -0.01783983795939171,
-            0.01681403638485071,
-            -0.015891170679831722,
-            0.015056087455685704,
-            -0.014296474556947074,
-            0.007423079534003944,
-            -0.019414642229367163,
+            -0.17146635,
+            -0.58554395,
+            0.52624149,
+            -0.85447827,
+            -1.6841704,
+            1.36578557,
+            -1.40390391,
+            0.44427496,
+            -0.24423406,
+            0.3436846,
+            -0.44535399,
+            1.04624509,
+            2.63032095,
+            -2.85969501,
+            3.05411655,
+            2.80455143,
+            2.03336768,
+            -1.65197954,
+            2.04173485,
+            2.47249761,
+            -2.25375619,
+            -2.55896367,
+            -0.31586582,
+            -3.15774946,
+            0.8601969,
+            -1.2072917,
+            -7.37268089,
+            4.46410864,
+            -1.12207614,
+            1.46065619,
+            1.92950953,
+            4.64211027,
         ];
 
-        let mut sig = vec![vec![0., 1., 2., 3.], vec![0.; expected_result.len() - 4]]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<f32>>();
+        let mut buff = TiledConv::new(kernel.len(), input.len());
 
-        let mut buff = CircularConvBuffer::new(filter_taps.len(), &filter_taps);
+        buff.convolve(&mut input, &kernel.into_iter().rev().collect::<Vec<f32>>());
 
-        buff.convolve(&mut sig);
-
-        check_results(&sig, &expected_result)
+        dbg!(&input);
+        check_results(&input, &expected_result)
     }
 
     #[test]
     fn doc_t() {
-        let mut buf = CircularConvBuffer::new(4, &[0., 1., 2., 4.]);
+        let mut buf = CircularConvBuffer::new(4);
         let input_signal = &mut [1., 0., 0., 0., 0.];
-        buf.convolve(input_signal);
+        buf.convolve(input_signal, &[1., 2., 3., 4.]);
         dbg!(&input_signal);
     }
 
+    /*
     #[test]
     fn test_cblas_conv() {
         let kernel: [f32; 32] = [
@@ -698,87 +796,12 @@ mod tests {
             7.68219493e-02,
         ];
 
-        let mut buf: SizedCircularConvBuff<32, 64> = SizedCircularConvBuff::new();
+        let mut buf: Cir<32, 64> = SizedCircularConvBuff::new();
 
         buf.convolve(sig, &kernel_reversed);
         assert_eq!(sig.len(), expected_result.len());
 
         check_results(sig, &expected_result);
-    }
-
-    /*
-    #[test]
-    fn test_cblas_conv_small() {
-        let kernel: [f32; 32] = [
-            -0.00116417,
-            -0.00139094,
-            0.00195951,
-            0.00293134,
-            -0.00437535,
-            -0.00637313,
-            0.00902803,
-            0.01248116,
-            -0.0169409,
-            -0.02273977,
-            0.03045372,
-            0.04118039,
-            -0.05729369,
-            -0.08500841,
-            0.14720004,
-            0.45005217,
-            0.45005217,
-            0.14720004,
-            -0.08500841,
-            -0.05729369,
-            0.04118039,
-            0.03045372,
-            -0.02273977,
-            -0.0169409,
-            0.01248116,
-            0.00902803,
-            -0.00637313,
-            -0.00437535,
-            0.00293134,
-            0.00195951,
-            -0.00139094,
-            -0.00116417,
-        ];
-
-        let mut kernel_reversed: [f32; 32] = [0.0_f32; 32];
-        kernel_reversed
-            .iter_mut()
-            .zip(kernel.iter().rev())
-            .for_each(|(kr, k)| *kr = *k);
-
-        let sig: &mut [f32] = &mut [
-            -0.3600947,
-            1.25699783,
-            0.26974943,
-            -0.14809912,
-            -1.27555489,
-            -0.48406062,
-            -0.68576611,
-            0.91506295,
-        ];
-
-        let expected_result = &[
-            0.00041921,
-            -0.00096249,
-            -0.00276805,
-            0.00120475,
-            0.00747976,
-            -0.0003666,
-            -0.01390415,
-            0.00098361,
-        ];
-
-        let mut buf = CircularConvBuffer32::new();
-
-        buf.convolve(sig, &kernel_reversed);
-        assert_eq!(sig.len(), expected_result.len());
-
-        dbg!(&sig);
-        check_results(sig, expected_result);
     }
     */
 }

@@ -8,10 +8,10 @@ fn os_bench(c: &mut Criterion) {
     let mut os_8x = Oversample::new(OversampleFactor::EightTimes, 64);
     let mut os_16x = Oversample::new(OversampleFactor::SixteenTimes, 64);
 
-    os_2x.initialize_oversample_stages();
-    os_4x.initialize_oversample_stages();
-    os_8x.initialize_oversample_stages();
-    os_16x.initialize_oversample_stages();
+    // os_2x.initialize_oversample_stages();
+    // os_4x.initialize_oversample_stages();
+    // os_8x.initialize_oversample_stages();
+    // os_16x.initialize_oversample_stages();
 
     let mut sig_2x = vec![vec![1.0], vec![0.0_f32; 63]]
         .into_iter()

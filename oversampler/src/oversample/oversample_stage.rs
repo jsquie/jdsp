@@ -1,161 +1,89 @@
-use crate::oversample::os_filter_constants::*;
-use circular_buffer::circular_buffer::{SizedCircularConvBuff, SizedDelayBuffer};
+use circular_buffer::circular_buffer::{CircularDelayBuffer, TiledConv};
 
-struct TwoTimes {
-    kernel: [f32; FILTER_EVEN_TAPS_OS2X],
-    filter_buff: SizedCircularConvBuff<FILTER_EVEN_TAPS_OS2X, OS2X_CONV_BUFFER_LEN>,
-    up_delay_buf: SizedDelayBuffer<OS2X_UP_STAGE_DELAY_AMT>,
-    down_delay_buf: SizedDelayBuffer<OS2X_DOWN_STAGE_DELAY_AMT>,
-    delay_coef: f32,
-}
-
-impl TwoTimes {
-    pub fn new() -> Self {
-        Self {
-            kernel: [0.0_f32; FILTER_EVEN_TAPS_OS2X],
-            filter_buff: SizedCircularConvBuff::new(1),
-            up_delay_buf: SizedDelayBuffer::new(OS2X_UP_STAGE_DELAY_AMT),
-            down_delay_buf: SizedDelayBuffer::new(OS2X_DOWN_STAGE_DELAY_AMT),
-            delay_coef: 0.0,
-        }
-    }
-}
-// struct FourTimes {
-// kernel: [f32; FILTER_EVEN_TAPS_OS4X],
-// }
-// struct EightTimes {
-// kernel: [f32; FILTER_EVEN_TAPS_OS8X],
-// }
-// struct SixteenTimes {
-// kernel: [f32; FILTER_EVEN_TAPS_OS16X],
-// }
+use super::os_filter_constants::build_filter_coefs;
 
 #[derive(Debug)]
-pub struct OversampleStage<F: OsFactor> {
+pub struct OversampleStage {
+    kernel: Vec<f32>,
+    delay_coef: f32,
+    up_conv_buff: TiledConv,
+    down_conv_buff: TiledConv,
+    up_delay_buf: CircularDelayBuffer,
+    down_delay_buf: CircularDelayBuffer,
     pub data: Vec<f32>,
-    scratch_buff: Vec<f32>,
-    factor: F,
+    scratch_buff_1: Vec<f32>,
+    scratch_buff_2: Vec<f32>,
 }
 
-pub trait OsFactor: Sized {
-    fn process_up(&mut self, input: &mut [f32], st: &mut OversampleStage<Self>);
-    fn process_down(&mut self, input: &mut [f32], st: &mut OversampleStage<Self>);
-}
+impl OversampleStage {
+    pub fn new(input_len: usize, kernel_size: usize) -> Self {
+        let coefs = build_filter_coefs((kernel_size * 2) - 1);
 
-impl OsFactor for TwoTimes {
-    fn process_up(&mut self, input: &mut [f32], st: &mut OversampleStage<Self>) {
-        input[..].clone_into(&mut st.scratch_buff);
-        self.up_delay_buf.delay(&mut st.scratch_buff);
-        self.filter_buff.convolve(input, &self.kernel);
-        st.data
+        OversampleStage {
+            kernel: Vec::from_iter(coefs.clone().into_iter().step_by(2)),
+            delay_coef: coefs[coefs.len() / 2],
+            up_conv_buff: TiledConv::new(kernel_size, input_len),
+            down_conv_buff: TiledConv::new(kernel_size, input_len),
+            up_delay_buf: CircularDelayBuffer::new(kernel_size / 2),
+            down_delay_buf: CircularDelayBuffer::new((kernel_size / 2) + 1),
+            data: vec![0.0_f32; input_len * 2],
+            scratch_buff_1: vec![0.0_f32; input_len],
+            scratch_buff_2: vec![0.0_f32; input_len],
+        }
+    }
+
+    pub fn process_up(&mut self, input: &[f32]) {
+        let input_len = input.len();
+        self.scratch_buff_1.clone_from_slice(input);
+        self.scratch_buff_2.clone_from_slice(input);
+        self.up_conv_buff
+            .convolve(&mut self.scratch_buff_1, &self.kernel);
+        self.up_delay_buf.delay(&mut self.scratch_buff_2);
+
+        self.data
             .iter_mut()
             .step_by(2)
-            .zip(input.iter())
+            .zip(self.scratch_buff_1.iter().take(input_len))
             .for_each(|(d, f)| *d = *f * 2.0);
-        st.data
+        self.data
             .iter_mut()
             .skip(1)
             .step_by(2)
-            .zip(st.scratch_buff.iter())
+            .zip(self.scratch_buff_2.iter().take(input_len))
             .for_each(|(o, i)| {
                 *o = *i * 2.0 * self.delay_coef;
             });
     }
 
-    fn process_down(&mut self, input: &mut [f32], st: &mut OversampleStage<Self>) {
-        st.data
+    pub fn process_down(&mut self, input: &[f32]) {
+        input
+            .iter()
+            .step_by(2)
+            .zip(self.scratch_buff_1.iter_mut())
+            .for_each(|(i, s)| *s = *i);
+        input
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .zip(self.scratch_buff_2.iter_mut())
+            .for_each(|(i, s)| *s = *i);
+        self.down_conv_buff
+            .convolve(&mut self.scratch_buff_1, &self.kernel);
+        self.down_delay_buf.delay(&mut self.scratch_buff_2);
+        self.data
             .iter_mut()
-            .zip(input.iter().step_by(2))
-            .for_each(|(d, i)| *d = *i);
-
-        st.scratch_buff
-            .iter_mut()
-            .zip(input.iter().skip(1).step_by(2))
-            .for_each(|(o, i)| *o = *i);
-
-        self.filter_buff.convolve(&mut st.data, &self.kernel);
-        self.down_delay_buf.delay(&mut st.scratch_buff);
-
-        st.data
-            .iter_mut()
-            .zip(st.scratch_buff.iter())
-            .for_each(|(c, d)| *c = *c + (*d * self.delay_coef));
-    }
-}
-
-impl OversampleStage<TwoTimes> {
-    pub fn new(input_len: usize) -> Self {
-        OversampleStage {
-            data: vec![0.0_f32; input_len],
-            scratch_buff: vec![0.0_f32; input_len],
-            factor: TwoTimes::new(),
-        }
+            .take(self.scratch_buff_1.len())
+            .zip(self.scratch_buff_1.iter().zip(self.scratch_buff_2.iter()))
+            .for_each(|(o, (c, d))| *o = *c + (*d * self.delay_coef));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::oversample::FILTER_EVEN_TAPS_OS2X;
-
-    use super::{OversampleStage, TwoTimes};
-
-    #[test]
-    fn test_create_os_stage() {
-        let os_stage: OversampleStage<TwoTimes> = OversampleStage::new(8);
-        assert_eq!(os_stage.scratch_buff.len(), 8);
-        assert_eq!(os_stage.data.len(), 8);
-        assert_eq!(os_stage.factor.kernel, [0.0_f32; FILTER_EVEN_TAPS_OS2X]);
-    }
-
-    /*
-    #[test]
-    fn test_os_stage_up() {
-        let _buf: &mut [f32] = &mut [0.0; 8];
-        let mut os_stage = OversampleStage::new(8, SampleRole::UpSampleStage);
-        os_stage.initialize_kernel();
-
-        let signal: &mut [f32] = &mut [1., 0., 0., 0.];
-
-        os_stage.process_up(signal);
-
-        let expected_result: &[f32] = &[
-            0.00000000e+00,
-            0.00000000e+00,
-            6.05694498e-07,
-            0.00000000e+00,
-            -8.55564241e-06,
-            0.00000000e+00,
-            5.03376904e-05,
-            0.00000000e+00,
-        ];
-        check_results(&os_stage.data, expected_result);
-    }
-
-    #[test]
-    fn test_os_stage_down() {
-        let _buf: &mut [f32] = &mut [0.0; 8];
-        let mut os_stage = OversampleStage::new(8, SampleRole::DownSampleStage);
-
-        os_stage.initialize_kernel();
-
-        let mut signal_vec: Vec<f32> = vec![vec![1.], vec![0.; 15]].into_iter().flatten().collect();
-
-        let signal: &mut [f32] = signal_vec.as_mut_slice();
-
-        os_stage.process_down(signal);
-
-        let expected_result: &[f32] = &[
-            0.00000000e+00,
-            3.02847249e-07,
-            -4.27782121e-06,
-            2.51688452e-05,
-            -9.81020621e-05,
-            2.97363887e-04,
-            -7.57236871e-04,
-            1.69370522e-03,
-        ];
-        check_results(expected_result, &os_stage.data);
-    }
+    use crate::oversample::{
+        os_filter_constants::{FILTER_EVEN_TAPS_OS2X, FILTER_EVEN_TAPS_OS4X},
+        oversample_stage::OversampleStage,
+    };
 
     const ERR_TOL: f32 = 1e-5;
 
@@ -176,70 +104,599 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_stage_up_small() {
-        let _buf_0: &mut [f32] = &mut [0.0; 8];
-        let _buf_1: &mut [f32] = &mut [0.0; 16];
+    fn test_create_os_stage_2x() {
+        let os_stage = OversampleStage::new(32, FILTER_EVEN_TAPS_OS2X);
 
-        let mut os_stage_0 = OversampleStage::new(8, SampleRole::UpSampleStage);
-        let mut os_stage_1 = OversampleStage::new(16, SampleRole::UpSampleStage);
-
-        os_stage_0.initialize_kernel();
-        os_stage_1.initialize_kernel();
-
-        let signal: &mut [f32] = &mut [1., 0., 0., 0.];
-
-        os_stage_0.process_up(signal);
-        os_stage_1.process_up(&mut os_stage_0.data);
-
-        let expected_result: &[f32] = &[
-            0.00000000e+00,
-            0.00000000e+00,
-            0.00000000e+00,
-            0.00000000e+00,
-            0.00000000e+00,
-            0.00000000e+00,
-            3.66865824e-13,
-            0.00000000e+00,
-            -5.18210553e-12,
-            0.00000000e+00,
-            2.53071566e-11,
-            0.00000000e+00,
-            -4.56407414e-11,
-            0.00000000e+00,
-            -3.99586764e-11,
-            0.00000000e+00,
+        let expected_kernel = [
+            -0.00000000e+00,
+            1.51446767e-08,
+            -1.40915785e-07,
+            6.23576000e-07,
+            -1.96968933e-06,
+            5.09446886e-06,
+            -1.15105822e-05,
+            2.35563551e-05,
+            -4.46590044e-05,
+            7.96253404e-05,
+            -1.34949868e-04,
+            2.19129092e-04,
+            -3.42971871e-04,
+            5.19899865e-04,
+            -7.66240585e-04,
+            1.10152992e-03,
+            -1.54886364e-03,
+            2.13537246e-03,
+            -2.89294976e-03,
+            3.85944992e-03,
+            -5.08072523e-03,
+            6.61414025e-03,
+            -8.53471943e-03,
+            1.09461395e-02,
+            -1.40010927e-02,
+            1.79410614e-02,
+            -2.31800852e-02,
+            3.05007273e-02,
+            -4.15862834e-02,
+            6.08301481e-02,
+            -1.04381453e-01,
+            3.17732102e-01,
+            3.17732102e-01,
+            -1.04381453e-01,
+            6.08301481e-02,
+            -4.15862834e-02,
+            3.05007273e-02,
+            -2.31800852e-02,
+            1.79410614e-02,
+            -1.40010927e-02,
+            1.09461395e-02,
+            -8.53471943e-03,
+            6.61414025e-03,
+            -5.08072523e-03,
+            3.85944992e-03,
+            -2.89294976e-03,
+            2.13537246e-03,
+            -1.54886364e-03,
+            1.10152992e-03,
+            -7.66240585e-04,
+            5.19899865e-04,
+            -3.42971871e-04,
+            2.19129092e-04,
+            -1.34949868e-04,
+            7.96253404e-05,
+            -4.46590044e-05,
+            2.35563551e-05,
+            -1.15105822e-05,
+            5.09446886e-06,
+            -1.96968933e-06,
+            6.23576000e-07,
+            -1.40915785e-07,
+            1.51446767e-08,
+            -0.00000000e+00,
         ];
 
-        check_results(&os_stage_1.data, expected_result);
+        assert_eq!(os_stage.data.len(), 64);
+        assert_eq!(os_stage.scratch_buff_1.len(), 32);
+        assert_eq!(os_stage.scratch_buff_2.len(), 32);
+
+        check_results(&os_stage.kernel, &expected_kernel);
+    }
+
+    #[test]
+    fn test_create_4x() {
+        let os_stage = OversampleStage::new(32, FILTER_EVEN_TAPS_OS4X);
+
+        let expected_result = [
+            -0.00000000e+00,
+            4.99048569e-08,
+            -5.44990368e-07,
+            2.69893186e-06,
+            -9.29313400e-06,
+            2.57363055e-05,
+            -6.14247687e-05,
+            1.31351873e-04,
+            -2.57875010e-04,
+            4.72528969e-04,
+            -8.17794184e-04,
+            1.34881251e-03,
+            -2.13522620e-03,
+            3.26365701e-03,
+            -4.84196195e-03,
+            7.00757984e-03,
+            -9.94472079e-03,
+            1.39207702e-02,
+            -1.93668857e-02,
+            2.70714084e-02,
+            -3.87104974e-02,
+            5.86571710e-02,
+            -1.03027989e-01,
+            3.17272447e-01,
+            3.17272447e-01,
+            -1.03027989e-01,
+            5.86571710e-02,
+            -3.87104974e-02,
+            2.70714084e-02,
+            -1.93668857e-02,
+            1.39207702e-02,
+            -9.94472079e-03,
+            7.00757984e-03,
+            -4.84196195e-03,
+            3.26365701e-03,
+            -2.13522620e-03,
+            1.34881251e-03,
+            -8.17794184e-04,
+            4.72528969e-04,
+            -2.57875010e-04,
+            1.31351873e-04,
+            -6.14247687e-05,
+            2.57363055e-05,
+            -9.29313400e-06,
+            2.69893186e-06,
+            -5.44990368e-07,
+            4.99048569e-08,
+            -0.00000000e+00,
+        ];
+
+        check_results(&os_stage.kernel, &expected_result);
+    }
+
+    #[test]
+    fn test_os_stage_up() {
+        let mut os_stage = OversampleStage::new(32, FILTER_EVEN_TAPS_OS2X);
+
+        let signal = vec![vec![1.], vec![0.0; 31]]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<f32>>();
+
+        os_stage.process_up(&signal);
+
+        let expected_result = [
+            0.00000000e+00,
+            3.25912454e-23,
+            3.02893534e-08,
+            -1.15219840e-21,
+            -2.81831570e-07,
+            -7.76493898e-25,
+            1.24715200e-06,
+            -7.83935067e-21,
+            -3.93937866e-06,
+            4.43340849e-20,
+            1.01889377e-05,
+            6.09160959e-20,
+            -2.30211645e-05,
+            -1.63479957e-20,
+            4.71127102e-05,
+            -1.92285408e-19,
+            -8.93180089e-05,
+            7.64921030e-19,
+            1.59250681e-04,
+            -2.04347008e-18,
+            -2.69899737e-04,
+            -3.39047341e-19,
+            4.38258184e-04,
+            -1.34867104e-18,
+            -6.85943741e-04,
+            4.98410336e-18,
+            1.03979973e-03,
+            -2.79183428e-18,
+            -1.53248117e-03,
+            -2.71044963e-18,
+            2.20305984e-03,
+            -5.13214012e-18,
+            -3.09772728e-03,
+            1.96491759e-17,
+            4.27074491e-03,
+            -8.54019187e-18,
+            -5.78589952e-03,
+            -1.31264618e-17,
+            7.71889984e-03,
+            -1.30350833e-17,
+            -1.01614505e-02,
+            5.68795002e-17,
+            1.32282805e-02,
+            -1.84196748e-17,
+            -1.70694389e-02,
+            2.13184385e-17,
+            2.18922790e-02,
+            -2.42594418e-17,
+            -2.80021854e-02,
+            2.71579253e-17,
+            3.58821229e-02,
+            -2.99228578e-17,
+            -4.63601705e-02,
+            3.24613597e-17,
+            6.10014546e-02,
+            -3.46835417e-17,
+            -8.31725668e-02,
+            3.65074313e-17,
+            1.21660296e-01,
+            -3.78636347e-17,
+            -2.08762906e-01,
+            3.86993921e-17,
+            6.35464203e-01,
+            1.00000000e+00,
+        ];
+
+        check_results(&os_stage.data, &expected_result);
+    }
+
+    #[test]
+    fn test_os_stage_down_2x() {
+        let mut os_stage = OversampleStage::new(32, FILTER_EVEN_TAPS_OS2X);
+
+        let signal: Vec<f32> = vec![vec![1.], vec![0.; 63]].into_iter().flatten().collect();
+
+        os_stage.process_down(&signal);
+
+        let expected_result = [
+            0.00000000e+00,
+            1.51446767e-08,
+            -1.40915785e-07,
+            6.23576000e-07,
+            -1.96968933e-06,
+            5.09446886e-06,
+            -1.15105822e-05,
+            2.35563551e-05,
+            -4.46590044e-05,
+            7.96253404e-05,
+            -1.34949868e-04,
+            2.19129092e-04,
+            -3.42971871e-04,
+            5.19899865e-04,
+            -7.66240585e-04,
+            1.10152992e-03,
+            -1.54886364e-03,
+            2.13537246e-03,
+            -2.89294976e-03,
+            3.85944992e-03,
+            -5.08072523e-03,
+            6.61414025e-03,
+            -8.53471943e-03,
+            1.09461395e-02,
+            -1.40010927e-02,
+            1.79410614e-02,
+            -2.31800852e-02,
+            3.05007273e-02,
+            -4.15862834e-02,
+            6.08301481e-02,
+            -1.04381453e-01,
+            3.17732102e-01,
+        ];
+
+        check_results(&expected_result, &os_stage.data);
+    }
+
+    #[test]
+    fn test_multi_stage_up() {
+        let mut os_stage_0 = OversampleStage::new(32, FILTER_EVEN_TAPS_OS2X);
+        let mut os_stage_1 = OversampleStage::new(64, FILTER_EVEN_TAPS_OS4X);
+
+        let signal = vec![1.0_f32; 32];
+
+        os_stage_0.process_up(&signal);
+        os_stage_1.process_up(&os_stage_0.data);
+
+        let expected_after_up_2x = [
+            0.00000000e+00,
+            3.25912454e-23,
+            3.02893534e-08,
+            -1.11960716e-21,
+            -2.51542217e-07,
+            -1.12038365e-21,
+            9.95609783e-07,
+            -8.95973432e-21,
+            -2.94376887e-06,
+            3.53743506e-20,
+            7.24516886e-06,
+            9.62904466e-20,
+            -1.57759956e-05,
+            7.99424509e-20,
+            3.13367146e-05,
+            -1.12342957e-19,
+            -5.79812943e-05,
+            6.52578073e-19,
+            1.01269387e-04,
+            -1.39089201e-18,
+            -1.68630350e-04,
+            -1.72993935e-18,
+            2.69627834e-04,
+            -3.07861039e-18,
+            -4.16315907e-04,
+            1.90549297e-18,
+            6.23483822e-04,
+            -8.86341308e-19,
+            -9.08997349e-04,
+            -3.59679094e-18,
+            1.29406249e-03,
+            -8.72893106e-18,
+            -1.80366480e-03,
+            1.09202449e-17,
+            2.46708012e-03,
+            2.38005300e-18,
+            -3.31881940e-03,
+            -1.07464087e-17,
+            4.40008043e-03,
+            -2.37814921e-17,
+            -5.76137002e-03,
+            3.30980081e-17,
+            7.46691047e-03,
+            1.46783333e-17,
+            -9.60252838e-03,
+            3.59967718e-17,
+            1.22897506e-02,
+            1.17373300e-17,
+            -1.57124348e-02,
+            3.88952553e-17,
+            2.01696881e-02,
+            8.97239747e-18,
+            -2.61904823e-02,
+            4.14337571e-17,
+            3.48109723e-02,
+            6.75021548e-18,
+            -4.83615945e-02,
+            4.32576467e-17,
+            7.32987016e-02,
+            5.39401199e-18,
+            -1.35464204e-01,
+            4.40934040e-17,
+            4.99999999e-01,
+            1.00000000e+00,
+        ];
+
+        check_results(&os_stage_0.data, &expected_after_up_2x);
+
+        let expected_after_up_4x = [
+            0.00000000e+00,
+            0.00000000e+00,
+            0.00000000e+00,
+            2.69324167e-45,
+            3.25292287e-30,
+            2.50302029e-30,
+            3.02317169e-15,
+            -1.14228474e-28,
+            -3.30148117e-14,
+            -9.73495660e-29,
+            1.38391445e-13,
+            1.80179731e-28,
+            -2.88789870e-13,
+            6.34838168e-27,
+            3.00653028e-13,
+            -2.76648127e-27,
+            -1.30997489e-13,
+            -5.76169820e-26,
+            8.99411102e-14,
+            8.57872824e-27,
+            -1.59085280e-14,
+            3.75236546e-25,
+            -1.37617842e-12,
+            -1.17512695e-26,
+            4.69837027e-12,
+            -1.91240072e-24,
+            -8.45186577e-12,
+            6.28187750e-26,
+            1.27600426e-11,
+            7.78047850e-24,
+            -2.23898409e-11,
+            -3.59904547e-26,
+            3.97151643e-11,
+            -2.63841667e-23,
+            -5.89696744e-11,
+            2.44710975e-25,
+            7.87110083e-11,
+            7.30981814e-23,
+            -1.11822649e-10,
+            -1.30301955e-25,
+            1.63558227e-10,
+            -1.77133544e-22,
+            -2.11495709e-10,
+            6.66540849e-25,
+            2.28792145e-10,
+            3.83346647e-22,
+            -1.57762290e-10,
+            -4.60860774e-25,
+            -5.22171839e-10,
+            -7.31815748e-22,
+            9.30071141e-09,
+            3.02893535e-08,
+            4.16055376e-08,
+            3.01572193e-22,
+            -1.16595339e-07,
+            -2.51542218e-07,
+            -2.60745665e-07,
+            -3.62100686e-21,
+            5.16171824e-07,
+            9.95609788e-07,
+            9.43652989e-07,
+            -4.76605554e-21,
+            -1.62027608e-06,
+            -2.94376888e-06,
+            -2.64397345e-06,
+            2.86171160e-20,
+            4.14396835e-06,
+            7.24516889e-06,
+            6.28614052e-06,
+            1.06799934e-19,
+            -9.27191069e-06,
+            -1.57759957e-05,
+            -1.33446235e-05,
+            6.40895626e-20,
+            1.88013580e-05,
+            3.13367147e-05,
+            2.60001573e-05,
+            -8.90770591e-20,
+            -3.53596214e-05,
+            -5.79812945e-05,
+            -4.73668266e-05,
+            6.19252209e-19,
+            6.25893339e-05,
+            1.01269387e-04,
+            8.16836243e-05,
+            -1.34419119e-18,
+            -1.05394186e-04,
+            -1.68630351e-04,
+            -1.34562315e-04,
+            -1.79411551e-18,
+            1.70136965e-04,
+            2.69627835e-04,
+            2.13183864e-04,
+            -2.99195417e-18,
+            -2.64882933e-04,
+            -4.16315909e-04,
+            -3.26537855e-04,
+            1.79028081e-18,
+            3.99585102e-04,
+            6.23483825e-04,
+            4.85604387e-04,
+            -7.35217622e-19,
+            -5.86314733e-04,
+            -9.08997353e-04,
+            -7.03586697e-04,
+            -3.79279157e-18,
+            8.39451571e-04,
+            1.29406249e-03,
+            9.96116862e-04,
+            -8.47697093e-18,
+            -1.17596584e-03,
+            -1.80366480e-03,
+            -1.38157853e-03,
+            1.05982413e-17,
+            1.61575089e-03,
+            2.46708013e-03,
+            1.88152422e-03,
+            2.79075514e-18,
+            -2.18220767e-03,
+            -3.31881942e-03,
+            -2.52141801e-03,
+            -1.12720900e-17,
+            2.90315119e-03,
+            4.40008045e-03,
+            3.33182455e-03,
+            -2.31003833e-17,
+            -3.81242683e-03,
+            -5.76137004e-03,
+        ];
+
+        check_results(&os_stage_1.data, &expected_after_up_4x);
     }
 
     #[test]
     fn test_os_multi_stage_down() {
-        let mut os_stage_0 = OversampleStage::new(16, SampleRole::DownSampleStage);
-        let mut os_stage_1 = OversampleStage::new(8, SampleRole::DownSampleStage);
+        let mut os_stage_0 = OversampleStage::new(64, FILTER_EVEN_TAPS_OS4X);
+        let mut os_stage_1 = OversampleStage::new(32, FILTER_EVEN_TAPS_OS2X);
 
-        os_stage_0.initialize_kernel();
-        os_stage_1.initialize_kernel();
+        let signal: Vec<f32> = vec![1.0_f32; 128];
 
-        let mut signal: Vec<f32> = vec![vec![1.], vec![0.; 31]].into_iter().flatten().collect();
-
-        os_stage_0.process_down(&mut signal[..]);
+        os_stage_0.process_down(&signal);
         os_stage_1.process_down(&os_stage_0.data);
 
-        let expected_result: &[f32] = &[
+        let expected_after_down_4x = [
             0.00000000e+00,
-            0.00000000e+00,
-            -1.29552638e-12,
-            -1.14101853e-11,
-            8.26681591e-11,
-            1.52379713e-10,
-            5.39599503e-10,
-            7.96325155e-10,
+            4.99048569e-08,
+            -4.95085511e-07,
+            2.20384635e-06,
+            -7.08928765e-06,
+            1.86470179e-05,
+            -4.27777509e-05,
+            8.85741219e-05,
+            -1.69300888e-04,
+            3.03228081e-04,
+            -5.14566103e-04,
+            8.34246402e-04,
+            -1.30097980e-03,
+            1.96267722e-03,
+            -2.87928474e-03,
+            4.12829511e-03,
+            -5.81642568e-03,
+            8.10434450e-03,
+            -1.12625412e-02,
+            1.58088672e-02,
+            -2.29016302e-02,
+            3.57555408e-02,
+            -6.72724480e-02,
+            2.49999999e-01,
+            1.06727245e+00,
+            9.64244459e-01,
+            1.02290163e+00,
+            9.84191133e-01,
+            1.01126254e+00,
+            9.91895655e-01,
+            1.00581643e+00,
+            9.95871705e-01,
+            1.00287928e+00,
+            9.98037323e-01,
+            1.00130098e+00,
+            9.99165754e-01,
+            1.00051457e+00,
+            9.99696772e-01,
+            1.00016930e+00,
+            9.99911426e-01,
+            1.00004278e+00,
+            9.99981353e-01,
+            1.00000709e+00,
+            9.99997796e-01,
+            1.00000050e+00,
+            9.99999950e-01,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
+            1.00000000e+00,
         ];
 
-        check_results(&os_stage_1.data, expected_result);
+        check_results(&os_stage_0.data, &expected_after_down_4x);
+
+        let expected_after_down_2x = [
+            0.00000000e+00,
+            8.13230719e-31,
+            -7.49791000e-15,
+            -3.75996061e-14,
+            4.24138849e-14,
+            1.85081456e-14,
+            8.30547962e-13,
+            1.07704421e-12,
+            4.33133087e-12,
+            4.93533347e-12,
+            1.29338946e-11,
+            4.32410917e-12,
+            -1.69983532e-10,
+            2.02989006e-08,
+            -1.57220805e-07,
+            6.13858650e-07,
+            -1.80200460e-06,
+            4.41881944e-06,
+            -9.59813248e-06,
+            1.90345575e-05,
+            -3.51769356e-05,
+            6.13855863e-05,
+            -1.02146713e-04,
+            1.63237166e-04,
+            -2.51934174e-04,
+            3.77168329e-04,
+            -5.49724696e-04,
+            7.82407732e-04,
+            -1.09030229e-03,
+            1.49108881e-03,
+            -2.00561127e-03,
+            2.65876405e-03,
+        ];
+
+        check_results(&os_stage_1.data, &expected_after_down_2x);
     }
 
+    /*
     const RAND_TEST_DATA: [f32; 64] = [
         2.542913180922093,
         0.5862253930784518,
