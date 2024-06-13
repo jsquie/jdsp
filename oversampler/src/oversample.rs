@@ -61,6 +61,22 @@ impl Oversample {
         self.factor = new_factor;
     }
 
+    pub fn get_latency_samples(&self) -> usize {
+        match self.factor {
+            OversampleFactor::TwoTimes => FILTER_EVEN_TAPS_OS2X,
+            OversampleFactor::FourTimes => FILTER_EVEN_TAPS_OS2X + (FILTER_EVEN_TAPS_OS4X / 2),
+            OversampleFactor::EightTimes => {
+                FILTER_EVEN_TAPS_OS2X + (FILTER_EVEN_TAPS_OS4X / 2) + (FILTER_EVEN_TAPS_OS8X / 4)
+            }
+            OversampleFactor::SixteenTimes => {
+                FILTER_EVEN_TAPS_OS2X
+                    + (FILTER_EVEN_TAPS_OS4X / 2)
+                    + (FILTER_EVEN_TAPS_OS8X / 4)
+                    + (FILTER_EVEN_TAPS_OS16X / 8)
+            }
+        }
+    }
+
     #[cold]
     pub fn reset(&mut self) {
         // self.up_stages
@@ -79,7 +95,6 @@ impl Oversample {
             .take(self.factor as usize)
             .for_each(|st| {
                 st.process_up(processed);
-                // dbg!(&st);
                 processed = &st.data;
             });
 
@@ -99,7 +114,6 @@ impl Oversample {
             .rev()
             .for_each(|st| {
                 st.process_down(last_stage);
-                dbg!(&st);
                 last_stage = &st.data;
             });
 

@@ -349,9 +349,6 @@ impl NonlinearProcessor {
     }
 
     fn change_state(&mut self) {
-        nih_debug_assert!(self.fade_out.is_some());
-        nih_debug_assert!(self.fade_in.is_none());
-        nih_dbg!("changing proc style to that of current state");
         self.saved_transition = None;
         self.proc = ADAA::from_nl_state(self.state);
     }
