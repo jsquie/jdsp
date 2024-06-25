@@ -10,6 +10,10 @@ use self::os_filter_constants::{
 };
 
 const MAX_OVER_SAMPLE_FACTOR: usize = 4;
+pub const MAX_LATENCY_AMT: usize = FILTER_EVEN_TAPS_OS2X
+    + (FILTER_EVEN_TAPS_OS4X / 2)
+    + (FILTER_EVEN_TAPS_OS8X / 4)
+    + (FILTER_EVEN_TAPS_OS16X / 8);
 
 #[derive(Enum, Debug, Copy, Clone, PartialEq)]
 pub enum OversampleFactor {

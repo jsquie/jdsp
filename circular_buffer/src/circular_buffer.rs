@@ -101,12 +101,6 @@ pub struct CircularConvBuffer {
 }
 
 impl CircularConvBuffer {
-    // const KERNEL_SIZE: usize = SIZE;
-    // const KERNEL_SIZE_I32: i32 = K_SIZE as i32;
-    // const NUM_CONV_BLOCKS: usize = 1;
-    // const BLOCK_SIZE: usize = K_SIZE * Self::NUM_CONV_BLOCKS;
-    // const BUF_SIZE: usize = Self::BLOCK_SIZE + Self::KERNEL_SIZE;
-
     pub fn new(new_k_size: usize) -> Self {
         // assert_eq!((buf_partitions * K_SIZE) % B_SIZE, 0);
         CircularConvBuffer {
@@ -275,7 +269,6 @@ impl CircularDelayBuffer {
     }
 
     /// Resets the buffer's data to all zeros and resets the buffers position value to zero
-    #[cold]
     fn reset(&mut self) {
         self.data.iter_mut().for_each(|x| *x = 0.0_f32.into());
         self.pos = 0;
@@ -289,6 +282,11 @@ impl CircularDelayBuffer {
             self.decrement_pos();
             *v = self.data[self.pos];
         })
+    }
+
+    pub fn set_delay_len(&mut self, new_len: usize) {
+        self.reset();
+        self.size = new_len;
     }
 }
 

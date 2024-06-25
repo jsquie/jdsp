@@ -152,6 +152,25 @@ impl IIRBiquadFilter {
         unimplemented!()
     }
 
+    pub fn process_sample(&mut self, sample: &mut f32) {
+        let mut y: f32 = 0.0;
+        let num_sections: usize = match &self.order {
+            FilterOrder::First => 1,
+            FilterOrder::Second => 2,
+        };
+        for i in 0..num_sections {
+            let state = self.states[i];
+            let coefs = self.coefs[i];
+
+            let x = if i == 0 { *sample } else { y };
+
+            y = (coefs[B0] * x) + state[W1];
+            self.states[i][W1] = (coefs[B1] * x) - (coefs[A1] * y) + state[W2];
+            self.states[i][W2] = (coefs[B2] * x) - (coefs[A2] * y);
+        }
+        *sample = y;
+    }
+
     pub fn process_block(&mut self, input_signal: &mut [f32]) {
         input_signal.iter_mut().for_each(|s| {
             let mut y: f32 = 0.0;

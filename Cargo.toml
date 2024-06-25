@@ -9,8 +9,8 @@ members = [
 
 [profile.release]
 opt-level = 3
-strip = "symbols"
+strip = "none"
 codegen-units = 1
-lto = "fat"
+lto = "fat" 
 
 
