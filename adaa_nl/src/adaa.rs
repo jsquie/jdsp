@@ -331,6 +331,10 @@ mod test {
     fn check_change_state() {
         let mut proc = NonlinearProcessor::new();
 
+        let expected_proc_state = ProcState::hard_clip_proc_state();
+        let expected_adaa = ADAA::from_nl_state(State(HardClip, FirstOrder));
+        let expected_adaa_after = ADAA::from_nl_state(State(HardClip, SecondOrder));
+
         let _first_order_hc_adaa = ADAA {
             current_proc_state: ProcState::hard_clip_proc_state(),
             proc_alg: ADAA::PROCESS_FIRST_ORDER,
@@ -347,6 +351,9 @@ mod test {
             ADAA::PROCESS_FIRST_ORDER,
             "proc state alg not ADAA:PROCESS_FIRST_ORDER before change of state"
         );
+
+        assert_eq!(proc.proc.current_proc_state, expected_proc_state);
+        assert_eq!(proc.proc, expected_adaa);
 
         for _ in 0..FADE_LEN {
             proc.process(0.0);
@@ -382,6 +389,18 @@ mod test {
 
         assert!(proc.fade_in.is_none());
         assert_eq!(proc.state, State(HardClip, SecondOrder));
+        assert_eq!(proc.proc.current_proc_state.nl_func, ProcState::HARD_CLIP);
+        assert_eq!(
+            proc.proc.current_proc_state.nl_func_ad1,
+            ProcState::HARD_CLIP_AD1
+        );
+        assert_eq!(
+            proc.proc.current_proc_state.nl_func_ad2,
+            ProcState::HARD_CLIP_AD2
+        );
+
+        assert_eq!(proc.proc.current_proc_state, expected_proc_state);
+        assert_eq!(proc.proc, expected_adaa_after);
     }
 
     #[test]
