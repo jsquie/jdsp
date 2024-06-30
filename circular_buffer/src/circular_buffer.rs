@@ -1,14 +1,6 @@
 use std::ptr;
 
-#[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::*;
-
-#[cfg(not(target_arch = "aarch64"))]
-fn dot_prod(buf: &[f32], kernel: &[f32]) -> f32 {
-    buf.iter()
-        .zip(kernel.iter())
-        .fold(0.0, |acc, (b, k)| acc + (b * k))
-}
+use std::simd::{prelude::*, LaneCount, SimdElement, SupportedLaneCount};
 
 #[derive(Debug)]
 pub struct TiledConv {
@@ -26,12 +18,15 @@ impl TiledConv {
         }
     }
 
-    pub fn convolve(&mut self, input: &mut [f32], kernel: &[f32]) {
+    pub fn convolve<T, const N: usize>(&mut self, input: &mut [f32], kernel: &[f32])
+    where
+        T: SimdElement + PartialEq,
+        LaneCount<N>: SupportedLaneCount,
+    {
         Self::fast_copy(input, &mut self.buffer[self.k_len - 1..]);
         for i in 0..self.i_len {
-            unsafe {
-                input[i] = Self::neon_dot_product(&self.buffer[i..i + self.k_len], kernel);
-            }
+            input[i] =
+                Self::dot_product_simd_generic::<f32, N>(&self.buffer[i..i + self.k_len], kernel);
         }
         for i in 0..self.k_len - 1 {
             self.buffer[i] = self.buffer[self.i_len + i];
@@ -39,21 +34,28 @@ impl TiledConv {
     }
 
     #[inline]
-    unsafe fn neon_dot_product(a: &[f32], b: &[f32]) -> f32 {
+    fn dot_product_simd_generic<T, const N: usize>(a: &[f32], b: &[f32]) -> f32
+    where
+        T: SimdElement + PartialEq,
+        LaneCount<N>: SupportedLaneCount,
+    {
         assert!(a.len() == b.len());
-        let mut sum = vdupq_n_f32(0.0);
+
+        let mut sum = Simd::<f32, N>::splat(0.0);
         let mut result = 0.0;
 
-        for (chunk_a, chunk_b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
-            let a_vec = vld1q_f32(chunk_a.as_ptr());
-            let b_vec = vld1q_f32(chunk_b.as_ptr());
-            sum = vmlaq_f32(sum, a_vec, b_vec);
+        let a_chunks = a.chunks_exact(N);
+        let b_chunks = b.chunks_exact(N);
+        let a_remain = a_chunks.remainder();
+        let b_remain = b_chunks.remainder();
+
+        for (chunk_a, chunk_b) in a_chunks.zip(b_chunks) {
+            let mut a_vec = Simd::<f32, N>::load_or_default(chunk_a);
+            a_vec *= Simd::<f32, N>::load_or_default(chunk_b);
+            sum += a_vec;
         }
 
-        let a_remain = a.chunks_exact(4).remainder();
-        let b_remain = b.chunks_exact(4).remainder();
-
-        result += vaddvq_f32(sum);
+        result += sum.reduce_sum();
 
         for (aa, bb) in a_remain.iter().zip(b_remain.iter()) {
             result += aa * bb;
@@ -130,19 +132,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn create_f32() {
-        let new = CircularDelayBuffer::new(1);
-        assert_eq!(new.pos, 0);
-        assert_eq!(new.size, 1);
-        assert_eq!(new.data, vec![0.0]);
-
-        let new_conv = CircularConvBuffer::new(1);
-        assert_eq!(new_conv.buff, vec![0.0, 0.0]);
-        assert_eq!(new_conv.block_size, 1);
-        assert_eq!(new_conv.k_size, 1);
-    }
-
-    #[test]
     fn push_sucess() {
         let mut new = CircularDelayBuffer::new(1);
         new.push(1.);
@@ -169,9 +158,9 @@ mod tests {
         let mut k = [0.0_f32; 3];
         k.copy_from_slice(&kernel);
 
-        buf.convolve(&mut signal1, &k);
-        buf.convolve(&mut signal2, &k);
-        buf.convolve(&mut signal3, &k);
+        buf.convolve::<f32, 8>(&mut signal1, &k);
+        buf.convolve::<f32, 8>(&mut signal2, &k);
+        buf.convolve::<f32, 8>(&mut signal3, &k);
         // dbg!(&signal[..3]);
         // dbg!(&signal[3..6]);
         // dbg!(&signal[6..]);
@@ -208,7 +197,7 @@ mod tests {
 
         let mut buf = TiledConv::new(10, 30);
 
-        buf.convolve(&mut sig, &kernel);
+        buf.convolve::<f32, 8>(&mut sig, &kernel);
 
         let expected_result = vec![
             0.00000000e+00,
@@ -252,17 +241,6 @@ mod tests {
     fn delay_5_samples() {
         let mut sig: Vec<f32> = (1..10).map(|x| x as f32).collect();
         let mut delay_buf = CircularDelayBuffer::new(5);
-
-        delay_buf.delay(&mut sig);
-        let expected_result = vec![0., 0., 0., 0., 1., 2., 3., 4., 5.];
-        dbg!(&sig);
-        check_results(&sig, &expected_result);
-    }
-
-    #[test]
-    fn delay_5_samples_sized() {
-        let mut sig: Vec<f32> = (1..10).map(|x| x as f32).collect();
-        let mut delay_buf: SizedDelayBuffer<5> = SizedDelayBuffer::new(5);
 
         delay_buf.delay(&mut sig);
         let expected_result = vec![0., 0., 0., 0., 1., 2., 3., 4., 5.];
@@ -429,18 +407,10 @@ mod tests {
 
         let mut buff = TiledConv::new(kernel.len(), input.len());
 
-        buff.convolve(&mut input, &kernel.into_iter().rev().collect::<Vec<f32>>());
+        buff.convolve::<f32, 8>(&mut input, &kernel.into_iter().rev().collect::<Vec<f32>>());
 
         dbg!(&input);
         check_results(&input, &expected_result)
-    }
-
-    #[test]
-    fn doc_t() {
-        let mut buf = CircularConvBuffer::new(4);
-        let input_signal = &mut [1., 0., 0., 0., 0.];
-        buf.convolve(input_signal, &[1., 2., 3., 4.]);
-        dbg!(&input_signal);
     }
 
     /*

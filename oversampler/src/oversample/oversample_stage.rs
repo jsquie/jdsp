@@ -37,7 +37,7 @@ impl OversampleStage {
         self.scratch_buff_1.clone_from_slice(input);
         self.scratch_buff_2.clone_from_slice(input);
         self.up_conv_buff
-            .convolve(&mut self.scratch_buff_1, &self.kernel);
+            .convolve::<f32, 8>(&mut self.scratch_buff_1, &self.kernel);
         self.up_delay_buf.delay(&mut self.scratch_buff_2);
 
         self.data
@@ -68,7 +68,7 @@ impl OversampleStage {
             .zip(self.scratch_buff_2.iter_mut())
             .for_each(|(i, s)| *s = *i);
         self.down_conv_buff
-            .convolve(&mut self.scratch_buff_1, &self.kernel);
+            .convolve::<f32, 8>(&mut self.scratch_buff_1, &self.kernel);
         self.down_delay_buf.delay(&mut self.scratch_buff_2);
         self.data
             .iter_mut()
