@@ -54,7 +54,6 @@ impl TiledConv {
             a_vec *= Simd::<f32, N>::load_or_default(chunk_b);
             sum += a_vec;
         }
-
         result += sum.reduce_sum();
 
         for (aa, bb) in a_remain.iter().zip(b_remain.iter()) {
@@ -161,9 +160,6 @@ mod tests {
         buf.convolve::<f32, 8>(&mut signal1, &k);
         buf.convolve::<f32, 8>(&mut signal2, &k);
         buf.convolve::<f32, 8>(&mut signal3, &k);
-        // dbg!(&signal[..3]);
-        // dbg!(&signal[3..6]);
-        // dbg!(&signal[6..]);
         let mut result: Vec<f32> = Vec::with_capacity(7);
 
         signal1.iter().for_each(|a| {
