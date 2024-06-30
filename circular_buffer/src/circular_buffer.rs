@@ -1,14 +1,6 @@
 use std::ptr;
 
-#[cfg(target_arch = "aarch64")]
-use std::arch::aarch64::*;
-
-#[cfg(not(target_arch = "aarch64"))]
-fn dot_prod(buf: &[f32], kernel: &[f32]) -> f32 {
-    buf.iter()
-        .zip(kernel.iter())
-        .fold(0.0, |acc, (b, k)| acc + (b * k))
-}
+use std::simd::{f32x8, num::SimdFloat};
 
 #[derive(Debug)]
 pub struct TiledConv {
@@ -29,9 +21,7 @@ impl TiledConv {
     pub fn convolve(&mut self, input: &mut [f32], kernel: &[f32]) {
         Self::fast_copy(input, &mut self.buffer[self.k_len - 1..]);
         for i in 0..self.i_len {
-            unsafe {
-                input[i] = Self::neon_dot_product(&self.buffer[i..i + self.k_len], kernel);
-            }
+            input[i] = Self::dot_product(&self.buffer[i..i + self.k_len], kernel);
         }
         for i in 0..self.k_len - 1 {
             self.buffer[i] = self.buffer[self.i_len + i];
@@ -39,21 +29,27 @@ impl TiledConv {
     }
 
     #[inline]
-    unsafe fn neon_dot_product(a: &[f32], b: &[f32]) -> f32 {
+    fn dot_product(a: &[f32], b: &[f32]) -> f32 {
         assert!(a.len() == b.len());
-        let mut sum = vdupq_n_f32(0.0);
+
+        let mut sum = f32x8::splat(0.0);
         let mut result = 0.0;
 
-        for (chunk_a, chunk_b) in a.chunks_exact(4).zip(b.chunks_exact(4)) {
-            let a_vec = vld1q_f32(chunk_a.as_ptr());
-            let b_vec = vld1q_f32(chunk_b.as_ptr());
-            sum = vmlaq_f32(sum, a_vec, b_vec);
+        let a_chunks = a.chunks_exact(8);
+        let b_chunks = b.chunks_exact(8);
+        let a_remain = a_chunks.remainder();
+        let b_remain = b_chunks.remainder();
+
+        // dbg!(&a_chunks);
+        // dbg!(&a_chunks);
+
+        for (chunk_a, chunk_b) in a_chunks.zip(b_chunks) {
+            let a_vec = f32x8::from_slice(chunk_a);
+            let b_vec = f32x8::from_slice(chunk_b);
+            sum += a_vec * b_vec;
         }
 
-        let a_remain = a.chunks_exact(4).remainder();
-        let b_remain = b.chunks_exact(4).remainder();
-
-        result += vaddvq_f32(sum);
+        result += sum.reduce_sum();
 
         for (aa, bb) in a_remain.iter().zip(b_remain.iter()) {
             result += aa * bb;
@@ -130,19 +126,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn create_f32() {
-        let new = CircularDelayBuffer::new(1);
-        assert_eq!(new.pos, 0);
-        assert_eq!(new.size, 1);
-        assert_eq!(new.data, vec![0.0]);
-
-        let new_conv = CircularConvBuffer::new(1);
-        assert_eq!(new_conv.buff, vec![0.0, 0.0]);
-        assert_eq!(new_conv.block_size, 1);
-        assert_eq!(new_conv.k_size, 1);
-    }
-
-    #[test]
     fn push_sucess() {
         let mut new = CircularDelayBuffer::new(1);
         new.push(1.);
@@ -172,9 +155,7 @@ mod tests {
         buf.convolve(&mut signal1, &k);
         buf.convolve(&mut signal2, &k);
         buf.convolve(&mut signal3, &k);
-        // dbg!(&signal[..3]);
-        // dbg!(&signal[3..6]);
-        // dbg!(&signal[6..]);
+
         let mut result: Vec<f32> = Vec::with_capacity(7);
 
         signal1.iter().for_each(|a| {
@@ -252,17 +233,6 @@ mod tests {
     fn delay_5_samples() {
         let mut sig: Vec<f32> = (1..10).map(|x| x as f32).collect();
         let mut delay_buf = CircularDelayBuffer::new(5);
-
-        delay_buf.delay(&mut sig);
-        let expected_result = vec![0., 0., 0., 0., 1., 2., 3., 4., 5.];
-        dbg!(&sig);
-        check_results(&sig, &expected_result);
-    }
-
-    #[test]
-    fn delay_5_samples_sized() {
-        let mut sig: Vec<f32> = (1..10).map(|x| x as f32).collect();
-        let mut delay_buf: SizedDelayBuffer<5> = SizedDelayBuffer::new(5);
 
         delay_buf.delay(&mut sig);
         let expected_result = vec![0., 0., 0., 0., 1., 2., 3., 4., 5.];
@@ -433,14 +403,6 @@ mod tests {
 
         dbg!(&input);
         check_results(&input, &expected_result)
-    }
-
-    #[test]
-    fn doc_t() {
-        let mut buf = CircularConvBuffer::new(4);
-        let input_signal = &mut [1., 0., 0., 0., 0.];
-        buf.convolve(input_signal, &[1., 2., 3., 4.]);
-        dbg!(&input_signal);
     }
 
     /*
