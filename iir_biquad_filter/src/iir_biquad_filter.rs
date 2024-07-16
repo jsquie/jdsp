@@ -81,6 +81,7 @@ impl IIRBiquadFilter {
         self.gen_coefficients(&new_cutoff_freq, self.order);
     }
 
+    #[inline]
     fn gen_coefficients(&mut self, cutoff_freq: &f32, order: FilterOrder) {
         match order {
             FilterOrder::First => {
@@ -127,6 +128,7 @@ impl IIRBiquadFilter {
         };
     }
 
+    #[inline]
     fn calculate_lowpass_sections(fc: &f32, fs: &f32, q_value: &f32) -> [f32; 5] {
         let omega_0: f32 = 2. * PI * (*fc / *fs);
         let alpha: f32 = omega_0.sin() / (2. * q_value);

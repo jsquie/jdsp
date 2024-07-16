@@ -182,7 +182,7 @@ impl ADAA {
             },
         };
 
-        nih_dbg!(&result);
+        // nih_dbg!(&result);
 
         result
     }
@@ -288,7 +288,7 @@ impl NonlinearProcessor {
             nl_process *= env.consume();
             if env.target_reached() {
                 self.change_state();
-                nih_dbg!("Setting fade in to SOME --- setting fade_out to NONE");
+                // nih_dbg!("Setting fade in to SOME --- setting fade_out to NONE");
                 self.fade_in = Some(LinearEnvelope::fade_in(FADE_LEN));
                 self.fade_out = None;
             }
@@ -297,7 +297,7 @@ impl NonlinearProcessor {
         if let Some(env) = &mut self.fade_in {
             nl_process *= env.consume();
             if env.target_reached() {
-                nih_dbg!("Setting fade in to None");
+                // nih_dbg!("Setting fade in to None");
                 self.fade_in = None;
             }
         }
