@@ -9,6 +9,7 @@ adaa_nl = { path = "../adaa_nl", default-features = false, optional= true}
 iir_biquad_filter = { path = "../iir_biquad_filter", default-features = false, optional = true }
 oversampler = { path = "../oversampler", default-features = false, optional = true }
 window = { path = "../window", default-features = false, optional = true }
+dc_filter = { path = "../dc_filter", default-features = false, optional = true }
 
 [features]
 default = []
@@ -17,9 +18,10 @@ all = [
   "adaa_nl",
   "iir_biquad_filter",
   "oversampler",
-  "window"
+  "window",
+  "dc_filter"
 ]
-# circular_buffer = ["circular_buffer"]
+nl_adaa = ["adaa_nl"]
 # adaa_nl = ["adaa_nl"]
 # iir_biquad_filter = ["iir_biquad_filter"]
 # oversampler = ["oversampler"]

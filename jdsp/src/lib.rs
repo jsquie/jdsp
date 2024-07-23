@@ -1,4 +1,4 @@
-#[cfg(feature = "all")]
+#[cfg(any(feature = "all", feature = "nl_adaa"))]
 pub use adaa_nl::adaa::AntiderivativeOrder;
 #[cfg(feature = "all")]
 pub use adaa_nl::adaa::NonlinearProcessor;
@@ -8,6 +8,8 @@ pub use adaa_nl::adaa::ProcessorState;
 pub use adaa_nl::adaa::ProcessorStyle;
 #[cfg(feature = "all")]
 pub use circular_buffer::circular_buffer::{CircularDelayBuffer, TiledConv};
+#[cfg(feature = "all")]
+pub use dc_filter::DCFilter;
 #[cfg(feature = "all")]
 pub use iir_biquad_filter::iir_biquad_filter::FilterOrder;
 #[cfg(feature = "all")]

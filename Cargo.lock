@@ -281,6 +281,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dc_filter"
+version = "0.1.0"
+
+[[package]]
 name = "deranged"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -383,6 +387,7 @@ version = "0.1.0"
 dependencies = [
  "adaa_nl",
  "circular_buffer",
+ "dc_filter",
  "iir_biquad_filter",
  "oversampler",
  "window",
