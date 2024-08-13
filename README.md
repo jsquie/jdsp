@@ -2,30 +2,13 @@
 Collection of audio processing tools written in Rust for use in audio plug-in development with Nih-Plug.
 
 ## Features
-- adaa_nl
-
-Nonlinear waveshaper with anti-derivative anti-aliasing
-
-- circular_buffer
-
-Circular buffer implementation with advanced portable SIMD convolution implementation for improved FIR filtering
-
-- dc_filter 
-- envelope
-
-Linear envelope generator
-
-- iir_biquad_filter
-
-IIR biquad filter implementation  
-
-- oversampler
-
-2, 4, 8, or 16 times variable FIR halfband polyphase oversampling 
-
-- window
-
-Sinc, Hann, and Kaiser window impelementations
+- `adaa_nl` -- Nonlinear waveshaper with anti-derivative anti-aliasing
+- `circular_buffer` -- Circular buffer implementation with advanced portable SIMD convolution implementation for improved FIR filtering
+- `dc_filter` 
+- `envelope` -- Linear envelope generator
+- `iir_biquad_filter` -- IIR biquad filter implementation  
+- `oversampler` -- 2, 4, 8, or 16 times variable FIR halfband polyphase oversampling 
+- `window` -- Sinc, Hann, and Kaiser window impelementations
 
 ## Installation Instructions
 - add to Cargo.toml file
