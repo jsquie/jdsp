@@ -11,14 +11,14 @@ Collection of audio processing tools written in Rust for use in audio plug-in de
 - `window` -- Sinc, Hann, and Kaiser window impelementations
 
 ## Installation Instructions
-- add to Cargo.toml file
+add to Cargo.toml file
 ```Rust
 [dependencies]
 jdsp = { git = "https://github.com/jsquie/jdsp.git", features = ["all"] }
 ```
 
 ## Usage Instructions
-- import and use in your own project
+Import and use in your own project
 ```Rust
 use jdsp::IIRBiquadFilter;
 
