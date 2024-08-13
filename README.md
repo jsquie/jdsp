@@ -2,24 +2,24 @@
 Collection of audio processing tools written in Rust for use in audio plug-in development with Nih-Plug.
 
 ## Features
-- ### adaa_nl 
-- ### circular_buffer
-- ### dc_filter
-- ### envelope
-- ### iir_biquad_filter
-- ### oversampler
-- ### window
+- adaa_nl 
+- circular_buffer
+- dc_filter
+- envelope
+- iir_biquad_filter
+- oversampler
+- window
 
 ## Installation Instructions
 - add to Cargo.toml file
-```
+```Rust
 [dependencies]
 jdsp = { git = "https://github.com/jsquie/jdsp.git", features = ["all"] }
 ```
 
 ## Usage Instructions
 - import and use in your own project
-```
+```Rust
 use jdsp::IIRBiquadFilter;
 
 // declare
